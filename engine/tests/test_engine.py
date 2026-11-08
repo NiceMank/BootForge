@@ -201,6 +201,8 @@ class BootForgeEngineTests(unittest.TestCase):
         self.assertTrue(any(c.get("VTOY_MENU_TIMEOUT") == "12" for c in doc["control"]))
 
     def test_cli_dry_run_safety_lock_on_system_disk(self):
+        if sys.platform != "linux":
+            self.skipTest("lsblk is a Linux-specific utility")
         engine = str(Path(__file__).resolve().parent.parent / "bootforge_engine.py")
         lsblk_proc = subprocess.run(
             ["lsblk", "-J", "-b", "-p", "-o", "NAME,KNAME,SIZE,MODEL,VENDOR,SERIAL,TRAN,RM,RO,HOTPLUG,TYPE,FSTYPE,LABEL,UUID,MOUNTPOINT,MOUNTPOINTS,PTTYPE"],

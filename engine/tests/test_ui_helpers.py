@@ -1,15 +1,23 @@
 import os
 import py_compile
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from bootforge_ui.backend import OFFICIAL_CATALOG
-from bootforge_ui.theme import esc, format_bytes, format_speed, load_prefs, save_prefs
+from engine.catalog import OFFICIAL_CATALOG
+
+try:
+    from bootforge_ui.theme import esc, format_bytes, format_speed, load_prefs, save_prefs
+    HAS_GTK4 = True
+except (ImportError, ModuleNotFoundError):
+    HAS_GTK4 = False
 
 
 class BootForgeUIHelpersTests(unittest.TestCase):
     def test_markup_escape_and_formatting(self):
+        if not HAS_GTK4:
+            self.skipTest("GTK4 / PyGObject non disponible sur cet environnement")
         self.assertEqual(esc("Windows 11 & Linux <x86_64>"), "Windows 11 &amp; Linux &lt;x86_64&gt;")
         self.assertEqual(format_bytes(0), "0 o")
         self.assertEqual(format_bytes(512), "512 o")
@@ -18,6 +26,8 @@ class BootForgeUIHelpersTests(unittest.TestCase):
         self.assertEqual(format_speed(None), "")
 
     def test_prefs_persistence_defaults_to_simple(self):
+        if not HAS_GTK4:
+            self.skipTest("GTK4 / PyGObject non disponible sur cet environnement")
         with tempfile.TemporaryDirectory() as tmp:
             old_cfg = os.environ.get("XDG_CONFIG_HOME")
             os.environ["XDG_CONFIG_HOME"] = tmp
