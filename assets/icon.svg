@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <defs>
+    <linearGradient id="bf-bg" x1="12" y1="8" x2="116" y2="120" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#171C28" />
+      <stop offset="100%" stop-color="#090B10" />
+    </linearGradient>
+    <linearGradient id="bf-amber" x1="28" y1="24" x2="100" y2="104" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FBBF24" />
+      <stop offset="100%" stop-color="#D97706" />
+    </linearGradient>
+    <linearGradient id="bf-cyan" x1="64" y1="30" x2="108" y2="96" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#22D3EE" />
+      <stop offset="100%" stop-color="#0891B2" />
+    </linearGradient>
+  </defs>
+  <rect x="6" y="6" width="116" height="116" rx="28" fill="url(#bf-bg)" stroke="#2A3346" stroke-width="2" />
+  <rect x="34" y="22" width="60" height="22" rx="4" fill="#1E2534" stroke="#3B475F" stroke-width="2" />
+  <rect x="46" y="29" width="10" height="8" rx="1.5" fill="url(#bf-amber)" />
+  <rect x="72" y="29" width="10" height="8" rx="1.5" fill="url(#bf-cyan)" />
+  <path d="M28 48C28 44.6863 30.6863 42 34 42H94C97.3137 42 100 44.6863 100 48V92C100 100.837 92.8366 108 84 108H44C35.1634 108 28 100.837 28 92V48Z" fill="#11151E" stroke="#334155" stroke-width="2.5" />
+  <path d="M48 62H76L62 78H78L52 98L58 80H44L48 62Z" fill="url(#bf-amber)" />
+  <circle cx="86" cy="90" r="5" fill="url(#bf-cyan)" />
+</svg>

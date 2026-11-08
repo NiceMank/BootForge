@@ -1,0 +1,14 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=BootForge
+GenericName=Créateur de clés USB démarrables
+Comment=Créer des clés USB démarrables Windows ou Linux, en mode simple ou multi-systèmes
+Exec=/usr/bin/bootforge %f
+Icon=bootforge
+Terminal=false
+Categories=System;Filesystem;
+Keywords=usb;iso;boot;rufus;ventoy;windows;linux;flash;
+MimeType=application/x-cd-image;application/x-iso9660-image;application/x-raw-disk-image;
+StartupNotify=true
+StartupWMClass=io.github.nicemank.BootForge

@@ -1,0 +1,59 @@
+name: CI & Linux Package
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  test-and-package:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install system & GTK4 runtime packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 \
+            util-linux 7zip parted gdisk dosfstools ntfs-3g exfatprogs e2fsprogs \
+            desktop-file-utils xvfb
+
+      - name: Syntax check & unit tests
+        run: |
+          python3 -m compileall -q bootforge_ui engine
+          python3 -m unittest discover -s engine/tests -v
+          desktop-file-validate data/io.github.nicemank.BootForge.desktop
+
+      - name: Build .deb and portable tarball
+        run: |
+          bash packaging/build_deb.sh
+          dpkg-deb --info release/*.deb
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bootforge-linux-packages
+          path: |
+            release/*.deb
+            release/*.tar.gz
+
+      - name: Attach packages to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/*.deb
+            release/*.tar.gz
