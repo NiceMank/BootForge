@@ -95,7 +95,7 @@ jobs:
       - name: Compile NSIS Installer (.exe)
         shell: pwsh
         run: |
-          makensis -DVERSION=1.0.0 packaging/win_installer.nsi
+          & makensis "-DVERSION=1.0.0" packaging\win_installer.nsi
           Get-ChildItem -Path release
 
       - name: Upload Windows packages
