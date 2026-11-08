@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -25,8 +26,105 @@ SUPPORTED_EXTENSIONS = {
 }
 
 
+def _find_7z_binary() -> Optional[str]:
+    found = shutil.which("7z")
+    if found:
+        return found
+    if sys.platform == "win32":
+        for cand in (
+            r"C:\Program Files\7-Zip\7z.exe",
+            r"C:\Program Files (x86)\7-Zip\7z.exe",
+        ):
+            if os.path.isfile(cand):
+                return cand
+    return None
+
+
+def _inspect_iso9660_python(iso_path: str) -> List[Dict[str, str]]:
+    """Pure-Python ISO9660 / Joliet directory reader fallback when 7z is unavailable."""
+    entries: List[Dict[str, str]] = []
+    fsize = os.path.getsize(iso_path)
+    with open(iso_path, "rb") as f:
+        pvd_root: Optional[tuple[int, int]] = None
+        joliet_root: Optional[tuple[int, int]] = None
+
+        for sec in range(16, 48):
+            off = sec * 2048
+            if off + 2048 > fsize:
+                break
+            f.seek(off)
+            desc = f.read(2048)
+            if len(desc) < 2048 or desc[1:6] != b"CD001":
+                break
+            vtype = desc[0]
+            if vtype == 255:
+                break
+            if vtype in (1, 2) and len(desc) >= 190:
+                root_lba = int.from_bytes(desc[158:162], "little")
+                root_len = int.from_bytes(desc[166:170], "little")
+                if vtype == 1 and pvd_root is None:
+                    pvd_root = (root_lba, root_len)
+                elif vtype == 2 and desc[88:91] in (b"%/@", b"%/C", b"%/E"):
+                    joliet_root = (root_lba, root_len)
+
+        is_joliet = joliet_root is not None
+        root_pair = joliet_root or pvd_root
+        if not root_pair:
+            return entries
+
+        def _walk(lba: int, length: int, prefix: str, depth: int) -> None:
+            if depth > 6 or len(entries) >= 12000 or length <= 0 or length > 16 * 1024 * 1024:
+                return
+            byte_off = lba * 2048
+            if byte_off >= fsize:
+                return
+            f.seek(byte_off)
+            buf = f.read(length)
+            pos = 0
+            while pos + 34 <= len(buf) and len(entries) < 12000:
+                rec_len = buf[pos]
+                if rec_len == 0:
+                    next_sec = ((pos // 2048) + 1) * 2048
+                    if next_sec >= len(buf):
+                        break
+                    pos = next_sec
+                    continue
+                if pos + rec_len > len(buf) or rec_len < 34:
+                    break
+                rec = buf[pos : pos + rec_len]
+                pos += rec_len
+
+                name_len = rec[32]
+                if 33 + name_len > len(rec):
+                    continue
+                raw_name = rec[33 : 33 + name_len]
+                if raw_name in (b"\x00", b"\x01"):
+                    continue
+
+                if is_joliet:
+                    name = raw_name.decode("utf-16-be", errors="ignore")
+                else:
+                    name = raw_name.decode("latin-1", errors="ignore")
+                if ";" in name:
+                    name = name.split(";", 1)[0]
+                name = name.rstrip("\x00").strip("/")
+                if not name:
+                    continue
+
+                child_lba = int.from_bytes(rec[2:6], "little")
+                child_size = int.from_bytes(rec[10:14], "little")
+                is_dir = bool(rec[25] & 0x02)
+                rel = f"{prefix}/{name}" if prefix else name
+                entries.append({"Path": rel, "Size": str(child_size)})
+                if is_dir and child_lba != lba:
+                    _walk(child_lba, child_size, rel, depth + 1)
+
+        _walk(root_pair[0], root_pair[1], "", 0)
+    return entries
+
+
 def inspect_image(image_path: str) -> Dict[str, Any]:
-    """Inspect an ISO/IMG file safely without mounting, detecting OS, WIM size, and persistence."""
+    """Inspect an ISO/IMG file safely without mounting (or read-only on Windows if pure UDF), detecting OS and WIM."""
     real_path = os.path.realpath(image_path)
     p = Path(real_path)
     if not p.is_file():
@@ -78,9 +176,10 @@ def inspect_image(image_path: str) -> Dict[str, Any]:
     except OSError:
         pass
 
-    if is_iso and shutil.which("7z"):
+    sevenzip = _find_7z_binary() if is_iso else None
+    if is_iso and sevenzip:
         proc = subprocess.run(
-            ["7z", "l", "-slt", real_path],
+            [sevenzip, "l", "-slt", real_path],
             capture_output=True,
             text=True,
             timeout=25,
@@ -89,10 +188,28 @@ def inspect_image(image_path: str) -> Dict[str, Any]:
         if proc.returncode == 0:
             entries = _parse_7z_slt(proc.stdout)
             _classify_iso_entries(entries, info)
+    elif is_iso:
+        try:
+            entries = _inspect_iso9660_python(real_path)
+            if entries:
+                _classify_iso_entries(entries, info)
+        except OSError:
+            pass
+        if sys.platform == "win32" and info["os_family"] == "unknown":
+            try:
+                from engine.win_backend import inspect_iso_windows_mounted
 
-    # Check WIM editions if wimlib-imagex is installed and Windows detected
-    if info["os_family"] == "windows" and info["install_wim_path"] and shutil.which("wimlib-imagex"):
-        info["notes"].append("wimlib-imagex disponible : découpe FAT32 possible.")
+                win_entries = inspect_iso_windows_mounted(real_path)
+                if win_entries:
+                    _classify_iso_entries(win_entries, info)
+            except Exception:
+                pass
+
+    # Check WIM split tool availability
+    has_wimsplit = bool(shutil.which("wimlib-imagex")) or (sys.platform == "win32" and bool(shutil.which("dism")))
+    if info["os_family"] == "windows" and info["install_wim_path"] and has_wimsplit:
+        tool_name = "DISM" if sys.platform == "win32" else "wimlib-imagex"
+        info["notes"].append(f"{tool_name} disponible : découpe FAT32 possible.")
 
     return info
 

@@ -41,7 +41,7 @@ class BootForgeUIHelpersTests(unittest.TestCase):
 
     def test_python_sources_compile_cleanly(self):
         root = Path(__file__).resolve().parents[2]
-        for folder in ("bootforge_ui", "engine"):
+        for folder in ("bootforge_ui", "bootforge_win", "engine", "packaging"):
             for py_file in (root / folder).rglob("*.py"):
                 py_compile.compile(str(py_file), doraise=True)
 

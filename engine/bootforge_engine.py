@@ -22,9 +22,11 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# Ensure sibling imports work when invoked directly as script via pkexec
+# Ensure sibling imports work when invoked directly as script via pkexec or frozen binary
 ENGINE_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = ENGINE_DIR.parent
+PROJECT_ROOT = Path(getattr(sys, "_MEIPASS", ENGINE_DIR.parent))
+if str(ENGINE_DIR.parent) not in sys.path:
+    sys.path.insert(0, str(ENGINE_DIR.parent))
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -48,10 +50,24 @@ from engine.ventoy_manager import (
 )
 
 
+_EVENT_LOG_FP = None
+
+
+def set_event_log_path(log_path: Optional[str]) -> None:
+    global _EVENT_LOG_FP
+    if log_path:
+        Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+        _EVENT_LOG_FP = open(log_path, "a", encoding="utf-8")
+
+
 def emit(event_type: str, **payload: Any) -> None:
-    """Emit structured JSONL events to stdout for real-time Electron UI telemetry."""
+    """Emit structured JSONL events to stdout (and optional event log file) for real-time telemetry."""
     msg = {"type": event_type, "ts": time.time(), **payload}
-    print(json.dumps(msg, ensure_ascii=False), flush=True)
+    line = json.dumps(msg, ensure_ascii=False)
+    print(line, flush=True)
+    if _EVENT_LOG_FP is not None:
+        _EVENT_LOG_FP.write(line + "\n")
+        _EVENT_LOG_FP.flush()
 
 
 def emit_progress(percent: float, stage: str, message: str, speed_bps: Optional[float] = None) -> None:
@@ -128,11 +144,12 @@ def ensure_uefi_ntfs_image() -> Path:
     if asset_path.is_file() and asset_path.stat().st_size > 100000:
         return asset_path
 
-    cache_base = (
-        Path("/var/cache/bootforge")
-        if hasattr(os, "geteuid") and os.geteuid() == 0
-        else Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "bootforge"
-    )
+    if sys.platform == "win32":
+        cache_base = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")) / "BootForge"
+    elif hasattr(os, "geteuid") and os.geteuid() == 0:
+        cache_base = Path("/var/cache/bootforge")
+    else:
+        cache_base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "bootforge"
     cached_asset = cache_base / "uefi-ntfs" / "uefi-ntfs.img"
     if cached_asset.is_file() and cached_asset.stat().st_size > 100000:
         return cached_asset
@@ -751,6 +768,44 @@ def execute_job_file(job_path: str, dry_run: bool = False) -> None:
         job = json.load(f)
 
     action = str(job.get("action") or "")
+    if sys.platform == "win32":
+        from engine.win_backend import (
+            execute_win_flash_direct,
+            execute_win_toolbox,
+            execute_win_ventoy,
+        )
+
+        if action == "flash_direct":
+            execute_win_flash_direct(
+                job,
+                dry_run=dry_run,
+                emit=emit,
+                emit_progress=emit_progress,
+                emit_log=emit_log,
+                ensure_uefi_ntfs_image=ensure_uefi_ntfs_image,
+                copy_tree_with_progress=copy_tree_with_progress,
+            )
+        elif action in ("ventoy_install", "ventoy_update", "ventoy_apply"):
+            execute_win_ventoy(
+                job,
+                dry_run=dry_run,
+                emit=emit,
+                emit_progress=emit_progress,
+                emit_log=emit_log,
+                copy_with_progress=copy_with_progress,
+            )
+        elif action in ("usb_wipe_reset", "usb_badblocks", "usb_backup_img", "usb_benchmark"):
+            execute_win_toolbox(
+                job,
+                dry_run=dry_run,
+                emit=emit,
+                emit_progress=emit_progress,
+                emit_log=emit_log,
+            )
+        else:
+            raise ValueError(f"Action inconnue dans le job : {action}")
+        return
+
     if action == "flash_direct":
         execute_flash_direct(job, dry_run=dry_run)
     elif action in ("ventoy_install", "ventoy_update", "ventoy_apply"):
@@ -761,7 +816,7 @@ def execute_job_file(job_path: str, dry_run: bool = False) -> None:
         raise ValueError(f"Action inconnue dans le job : {action}")
 
 
-def main() -> int:
+def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="BootForge System Engine")
     sub = parser.add_subparsers(dest="cmd")
 
@@ -788,8 +843,11 @@ def main() -> int:
     p_job = sub.add_parser("run-job", help="Execute a privileged job JSON")
     p_job.add_argument("--job", required=True)
     p_job.add_argument("--dry-run", action="store_true")
+    p_job.add_argument("--event-log", default="")
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if getattr(args, "event_log", ""):
+        set_event_log_path(args.event_log)
     try:
         if args.cmd == "devices":
             print(json.dumps(list_block_devices(), ensure_ascii=False))
@@ -816,16 +874,25 @@ def main() -> int:
             print(json.dumps(build_ventoy_json(cfg), indent=2, ensure_ascii=False))
         elif args.cmd == "run-job":
             execute_job_file(args.job, dry_run=args.dry_run)
+            emit("engine_exit", exit_code=0)
         else:
             parser.print_help()
             return 1
         return 0
     except SafetyViolationError as exc:
         emit("error", code="SAFETY_BLOCKED", message=str(exc))
+        emit("engine_exit", exit_code=2)
         return 2
     except Exception as exc:
         emit("error", code="ENGINE_ERROR", message=str(exc))
+        emit("engine_exit", exit_code=1)
         return 1
+    finally:
+        if _EVENT_LOG_FP is not None:
+            try:
+                _EVENT_LOG_FP.close()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

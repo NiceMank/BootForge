@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -240,7 +241,12 @@ def parse_lsblk_json(raw_json: str, collect_sysfs: bool = True) -> List[BlockDev
 
 
 def list_block_devices() -> List[Dict[str, Any]]:
-    """Query live block devices using lsblk JSON output."""
+    """Query live block devices on Linux (lsblk) or Windows (Get-Disk)."""
+    if sys.platform == "win32":
+        from engine.win_backend import list_windows_block_devices
+
+        return list_windows_block_devices()
+
     proc = subprocess.run(
         [
             "lsblk",
@@ -264,6 +270,12 @@ def validate_target_device(
     allow_non_removable_usb: bool = True,
 ) -> BlockDeviceInfo:
     """Strictly validate that target is a safe whole removable/USB disk and NOT an OS disk."""
+    if sys.platform == "win32" and not str(device_path or "").startswith("/dev/"):
+        from engine.win_backend import validate_windows_target
+
+        match, _disk_num = validate_windows_target(device_path, devices=devices)
+        return match
+
     if not isinstance(device_path, str) or not WHOLE_DISK_RE.match(device_path):
         raise SafetyViolationError(
             f"Chemin de périphérique invalide ou interdit (disque entier attendu) : {device_path!r}"
@@ -463,7 +475,12 @@ def plan_partition_layout(
 
 
 def check_system_dependencies() -> Dict[str, Any]:
-    """Check presence of core and optional Linux tools needed by BootForge."""
+    """Check presence of core and optional tools needed by BootForge on the current OS."""
+    if sys.platform == "win32":
+        from engine.win_backend import check_windows_dependencies
+
+        return check_windows_dependencies()
+
     core_bins = {
         "lsblk": "Inventaire sécurisé des disques",
         "parted": "Création de tables GPT / MBR",
@@ -504,7 +521,7 @@ def check_system_dependencies() -> Dict[str, Any]:
             }
         )
 
-    project_root = Path(__file__).resolve().parent.parent
+    project_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
     bundled_uefi_ntfs = project_root / "assets" / "uefi-ntfs" / "uefi-ntfs.img"
     cached_uefi_ntfs = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "bootforge" / "uefi-ntfs" / "uefi-ntfs.img"
     uefi_ntfs_img = bundled_uefi_ntfs if bundled_uefi_ntfs.is_file() else cached_uefi_ntfs

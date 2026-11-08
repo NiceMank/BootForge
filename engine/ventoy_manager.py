@@ -9,9 +9,11 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -22,7 +24,10 @@ SUPPORTED_IMAGE_EXTS = (".iso", ".wim", ".img", ".vhd", ".vhdx", ".efi")
 
 
 def get_ventoy_cache_dir() -> Path:
-    if hasattr(os, "geteuid") and os.geteuid() == 0:
+    if sys.platform == "win32":
+        local_app = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+        base = Path(local_app) / "BootForge" / "ventoy"
+    elif hasattr(os, "geteuid") and os.geteuid() == 0:
         base = Path("/var/cache/bootforge/ventoy")
     else:
         base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "bootforge" / "ventoy"
@@ -31,12 +36,116 @@ def get_ventoy_cache_dir() -> Path:
 
 
 def find_cached_ventoy_dir() -> Optional[Path]:
-    """Locate an already-extracted Ventoy directory in cache."""
+    """Locate an already-extracted Ventoy Linux directory in cache."""
     cache = get_ventoy_cache_dir()
     for entry in sorted(cache.iterdir(), reverse=True):
         if entry.is_dir() and (entry / "Ventoy2Disk.sh").is_file() and (entry / "boot" / "boot.img").is_file():
             return entry
     return None
+
+
+def find_cached_ventoy_windows_dir() -> Optional[Path]:
+    """Locate an already-extracted Ventoy Windows directory in cache."""
+    cache = get_ventoy_cache_dir()
+    for entry in sorted(cache.iterdir(), reverse=True):
+        if entry.is_dir() and (entry / "Ventoy2Disk.exe").is_file():
+            return entry
+    return None
+
+
+def build_ventoy_windows_cli_args(
+    action: str,
+    disk_number: int,
+    scheme: str = "gpt",
+    secure_boot: bool = True,
+    reserve_mb: int = 0,
+) -> List[str]:
+    """Build exact command-line arguments for Ventoy2Disk.exe VTOYCLI."""
+    args = ["VTOYCLI"]
+    if action == "ventoy_update":
+        args.extend(["/U", f"/PhyDrive:{disk_number}"])
+        if not secure_boot:
+            args.append("/NOSB")
+        return args
+
+    args.extend(["/I", f"/PhyDrive:{disk_number}"])
+    if str(scheme).lower() == "gpt":
+        args.append("/GPT")
+    if not secure_boot:
+        args.append("/NOSB")
+    if int(reserve_mb or 0) > 0:
+        args.append(f"/R:{int(reserve_mb)}")
+    return args
+
+
+def download_and_extract_ventoy_windows(progress_cb=None) -> Path:
+    """Fetch latest Ventoy Windows release zip from GitHub, verify SHA-256, and extract safely."""
+    existing = find_cached_ventoy_windows_dir()
+    if existing:
+        return existing
+
+    cache = get_ventoy_cache_dir()
+    api_url = "https://api.github.com/repos/ventoy/Ventoy/releases/latest"
+    req = urllib.request.Request(api_url, headers={"User-Agent": "BootForge/1.0"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        release = json.loads(resp.read().decode("utf-8"))
+
+    assets = release.get("assets", [])
+    zip_asset = next((a for a in assets if str(a.get("name", "")).endswith("-windows.zip")), None)
+    sha_asset = next((a for a in assets if "sha256" in str(a.get("name", "")).lower()), None)
+
+    if not zip_asset:
+        raise RuntimeError("Archive Ventoy Windows introuvable dans la release GitHub.")
+
+    zip_url = zip_asset["browser_download_url"]
+    zip_name = os.path.basename(zip_asset["name"])
+    zip_path = cache / zip_name
+    total_size = int(zip_asset.get("size") or 0)
+
+    expected_sha256: Optional[str] = None
+    if sha_asset:
+        try:
+            sha_req = urllib.request.Request(sha_asset["browser_download_url"], headers={"User-Agent": "BootForge/1.0"})
+            with urllib.request.urlopen(sha_req, timeout=15) as sresp:
+                sha_text = sresp.read().decode("utf-8", errors="ignore")
+            for line in sha_text.splitlines():
+                if zip_name in line:
+                    token = line.strip().split()[0].lower()
+                    if re.match(r"^[0-9a-f]{64}$", token):
+                        expected_sha256 = token
+                        break
+        except Exception:
+            expected_sha256 = None
+
+    dl_req = urllib.request.Request(zip_url, headers={"User-Agent": "BootForge/1.0"})
+    hasher = hashlib.sha256()
+    downloaded = 0
+    with urllib.request.urlopen(dl_req, timeout=60) as dresp, open(zip_path, "wb") as out:
+        while True:
+            chunk = dresp.read(256 * 1024)
+            if not chunk:
+                break
+            out.write(chunk)
+            hasher.update(chunk)
+            downloaded += len(chunk)
+            if progress_cb and total_size > 0:
+                progress_cb(int(downloaded * 100 / total_size), f"Téléchargement Ventoy Windows ({downloaded // (1024*1024)} Mo)...")
+
+    if expected_sha256 and hasher.hexdigest().lower() != expected_sha256:
+        zip_path.unlink(missing_ok=True)
+        raise ValueError("Échec de vérification SHA-256 de l'archive Ventoy Windows.")
+
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        for member in zf.infolist():
+            member_path = (cache / member.filename).resolve()
+            if not str(member_path).startswith(str(cache.resolve())):
+                raise ValueError(f"Chemin non sûr dans l'archive Ventoy : {member.filename}")
+        zf.extractall(cache)
+
+    extracted = find_cached_ventoy_windows_dir()
+    if not extracted:
+        raise RuntimeError("L'extraction de Ventoy Windows n'a pas produit de dossier valide.")
+    return extracted
 
 
 def download_and_extract_ventoy(progress_cb=None) -> Path:

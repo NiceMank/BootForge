@@ -1,75 +1,137 @@
-# BootForge
+# 🚀 BootForge
 
-Utilitaire graphique Linux (GTK 4 / Libadwaita) permettant de créer des clés USB démarrables Windows ou Linux, ou de préparer une clé multi-systèmes avec Ventoy.
+Studio complet de création et gestion de clés USB bootables et multi-systèmes pour **Linux** et **Windows 10/11**.
 
-L'interface propose deux niveaux d'affichage activables à tout moment :
-- **Mode Simple** (par défaut) : écran épuré en 3 étapes pour choisir un fichier `.iso`/`.img` et créer la clé avec les réglages adaptés automatiquement.
-- **Mode Avancé** : accès complet aux paramètres de formatage (GPT/MBR, NTFS + UEFI:NTFS, FAT32 + découpe `install.wim`, mode DD, `autounattend.xml`, pilotes `$WinPEDriver$`, configuration `ventoy.json`, `badblocks`, QEMU/OVMF et journal des commandes).
+BootForge réunit la puissance de **Rufus** (flash direct UEFI:NTFS, contournement Windows 11, partitionnement GPT/MBR) et la souplesse de **Ventoy** (démarrage multi-OS dynamique sur une seule clé USB), le tout avec une véritable interface graphique native adaptée à tous les profils d'utilisateurs.
 
-## Fonctionnalités
+---
 
-### Création directe (compatible Rufus)
-- Prise en charge des images Windows 10/11 et Linux hybrides (`.iso`, `.img`, `.raw`, `.img.gz`, `.img.xz`).
-- Gestion des fichiers `install.wim` de plus de 4 Go via partition **NTFS + UEFI:NTFS** ou découpe automatique en FAT32 (`wimlib-imagex`).
-- Mode d'écriture brute (DD) pour les images Linux hybrides.
-- Création optionnelle du fichier `autounattend.xml` pour Windows 11 (TPM/Secure Boot/RAM, compte local hors ligne, BitLocker, langue) et dossier de pilotes `$WinPEDriver$`.
-- Persistance Linux `ext4` (`casper-rw` pour Ubuntu/Mint ou `persistence` pour Debian/Kali).
+## 🎯 Deux modes d'utilisation au choix
 
-### Mode multi-systèmes (Ventoy)
-- Installation ou mise à jour non destructive de Ventoy sur la clé USB.
-- Lecture d'une clé Ventoy existante et copie de plusieurs systèmes (Windows + Linux) sans tout effacer.
-- Configuration graphique de `/ventoy/ventoy.json` (règles globales Windows 11, alias, image par défaut, fichiers `.dat` persistants, profils `autounattend.xml`).
+Un bouton de bascule instantané dans l'en-tête permet d'adapter l'interface à votre profil :
 
-### Outils et téléchargements
-- Vérification d'intégrité (`SHA-256`, `SHA-1`, `MD5`).
-- Test de vitesse de lecture USB et contrôle de surface (`badblocks`).
-- Remise à zéro d'usine d'une clé USB (suppression de toutes les partitions et formatage complet).
-- Sauvegarde `.img` / `.img.gz` et aperçu en machine virtuelle lecture seule (QEMU/OVMF).
-- Téléchargement direct d'images officielles (Ubuntu, Linux Mint, Debian, SystemRescue, GParted Live, Kali Linux).
+- **Mode Simple (par défaut)** : Conçu pour les débutants et les usages rapides. Écran épuré en 3 étapes numérotées, choix de l'image ISO, sélection automatique et sécurisée des paramètres optimaux, zéro jargon technique.
+- **Mode Avancé** : Conçu pour les administrateurs système et passionnés. Accès direct aux options de partitionnement (GPT/MBR), systèmes de fichiers (NTFS + UEFI:NTFS, FAT32 avec découpe de gros `install.wim`, exFAT, DD brut), générateur d'automatisation Windows 11 `autounattend.xml`, injection de pilotes `$WinPEDriver$`, règles `/ventoy/ventoy.json`, outils bas niveau (`badblocks`, QEMU/OVMF) et console d'exécution en temps réel.
 
-## Installation
+---
 
-### Paquet `.deb` (Debian / Ubuntu / Kali Linux)
+## ✨ Fonctionnalités détaillées
 
+### ⚡ 1. Création directe (Compatible Rufus)
+- **Windows 10 / Windows 11** :
+  - Support natif des images ISO officielles Microsoft.
+  - Résolution automatique de la limite FAT32 de 4 Go via partition hybride **NTFS + UEFI:NTFS** (chargeur Pete Batard) ou par découpe dynamique en `.swm` (`wimlib-imagex`).
+  - **Suite d'ajustements Windows 11 24H2 / 25H2** :
+    - Contournement des exigences matérielles TPM 2.0, Secure Boot et 4 Go de RAM.
+    - Création d'un compte local hors ligne (contournement de l'obligation de compte Microsoft).
+    - Désactivation du chiffrement automatique des lecteurs par BitLocker.
+    - Désactivation des questions de confidentialité et télémétrie.
+    - Injection automatique d'un dossier de pilotes `$WinPEDriver$` sur la clé.
+- **Distributions Linux & BSD** :
+  - Écriture d'images hybrides en mode fichier ou en mode image brute (DD).
+  - Prise en charge de la persistance Linux `ext4` (`casper-rw` pour Ubuntu/Mint, `persistence` pour Debian/Kali).
+  - Détection automatique du schéma optimal (GPT/UEFI moderne vs MBR/BIOS hérité).
+
+### 🔀 2. Multi-Boot dynamique (Compatible Ventoy)
+- Installez ou mettez à jour le chargeur multi-systèmes Ventoy sur votre clé USB.
+- **Copiez plusieurs systèmes d'exploitation sur la même clé** (ex: Windows 11 + Ubuntu 24.04 + Debian + Clonezilla).
+- Ajout ou suppression de systèmes à la volée **sans formater ni effacer la clé**.
+- Éditeur visuel pour `/ventoy/ventoy.json` :
+  - Attribution d'alias conviviaux aux images ISO dans le menu de démarrage.
+  - Sélection du système démarré par défaut et délai de compte à rebours.
+  - Activation globale des contournements Windows 11 (`VTOY_WIN11_BYPASS_CHECK`, `VTOY_WIN11_BYPASS_NRO`).
+  - Association de fichiers de persistance `.dat` et de réponses d'installation automatique.
+
+### 🛠️ 3. Boîte à outils USB
+- **Calculateur de sommes de contrôle** : Hachage en streaming mémoire (`SHA-256`, `SHA-1`, `MD5`) avec comparaison instantanée.
+- **Test de débit séquentiel** : Mesure réelle de la vitesse de lecture continue de la clé (Mo/s).
+- **Vérification de surface (`badblocks`)** : Détection des blocs défectueux avec avertissement destructeur explicite.
+- **Remise à zéro d'usine** : Effacement complet des tables de partitions résiduelles et reformatage propre (FAT32 ou exFAT).
+- **Sauvegarde et restauration** : Clonage d'une clé complète vers une image disque (`.img` ou compressée `.img.gz`).
+- **Test en machine virtuelle** : Démarrage direct de la clé en émulation sécurisée sous QEMU (UEFI OVMF ou BIOS hérité).
+
+### 🌐 4. Catalogue d'OS vérifiés
+- Téléchargement direct en un clic d'images officielles fiables depuis les serveurs certifiés des éditeurs :
+  - **Grand public** : Windows 11, Ubuntu 24.04 LTS, Linux Mint 22, Debian 12, Fedora Workstation.
+  - **Experts & Sécurité** : Arch Linux, Kali Linux, Proxmox VE.
+  - **Dépannage & Sauvegarde** : SystemRescue, GParted Live, Clonezilla.
+
+---
+
+## 📥 Téléchargement et Installation
+
+Rendez-vous sur la page des [Releases officielles](https://github.com/NiceMank/BootForge/releases).
+
+### 🐧 Pour Linux (Debian, Ubuntu, Mint, Pop!_OS, etc.)
+
+#### Option A : Paquet `.deb` (Recommandé)
 ```bash
 sudo apt install ./bootforge_1.0.0_all.deb
 ```
+L'application s'ajoute automatiquement à votre menu d'applications GNOME / KDE / XFCE.
 
-### Lancer depuis les sources
-
-Installez les paquets nécessaires puis lancez `./bootforge` :
-
+#### Option B : Archive portable autonome
 ```bash
+tar -xzf BootForge-1.0.0-linux.tar.gz
+cd BootForge-1.0.0-linux
+./bootforge
+```
+
+### 🪟 Pour Windows (Windows 10 / Windows 11 - 64 bits)
+
+- **Programme d'installation** : Téléchargez `BootForge-1.0.0-win64-setup.exe` et suivez l'assistant.
+- **Version portable** : Décompressez `BootForge-1.0.0-win64-portable.zip` et lancez `BootForge.exe`.
+
+---
+
+## 💻 Exécution depuis les sources
+
+### Linux
+```bash
+# Dépendances système
 sudo apt update && sudo apt install -y \
   python3 python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 \
   pkexec 7zip parted gdisk dosfstools ntfs-3g exfatprogs e2fsprogs util-linux udisks2
-```
 
-Dépendances facultatives (découpe WIM FAT32 et test QEMU) :
-
-```bash
-sudo apt install -y wimtools qemu-system-x86 ovmf mtools xorriso smartmontools
-```
-
-Exécution directe :
-
-```bash
+# Lancement de l'application
 git clone https://github.com/NiceMank/BootForge.git
 cd BootForge
 ./bootforge
 ```
 
-## Tests et construction du paquet
+### Windows
+```powershell
+git clone https://github.com/NiceMank/BootForge.git
+cd BootForge
+python -m pip install -r requirements-win.txt
+python bootforge
+```
 
+---
+
+## 🧪 Tests et compilation
+
+### Exécuter la suite de tests
 ```bash
 python3 -m unittest discover -s engine/tests -v
+```
+
+### Construire les paquets Linux
+```bash
 bash packaging/build_deb.sh
 ```
 
-Les paquets `.deb` et `.tar.gz` sont générés dans `release/`.
+### Construire les paquets Windows
+```powershell
+python packaging/build_windows.py
+makensis -DVERSION=1.0.0 packaging/win_installer.nsi
+```
 
-## Licence et crédits
+---
 
-Distribué sous licence **GNU GPL v3.0** (`LICENSE`).
-- Chargeur `assets/uefi-ntfs/uefi-ntfs.img` issu du projet [Rufus](https://github.com/pbatard/rufus) (Pete Batard, GPLv3).
-- Support multi-systèmes basé sur [Ventoy](https://github.com/ventoy/Ventoy) (longpanda, GPLv3).
+## 📄 Licence et crédits
+
+Projet open-source distribué sous licence **GNU General Public License v3.0** (`LICENSE`).
+- Chargeur UEFI:NTFS issu du projet [Rufus](https://github.com/pbatard/rufus) (Pete Batard, GPLv3).
+- Architecture et concepts multi-boot basés sur [Ventoy](https://github.com/ventoy/Ventoy) (longpanda, GPLv3).
+- Icônes et intégration visuelle inspirées du design GNOME Human Interface Guidelines et des standards modernes de fluidité bureau.

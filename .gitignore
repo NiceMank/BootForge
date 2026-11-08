@@ -1,8 +1,12 @@
 # Build & package outputs
 release/
 dist/
+build/
 *.deb
 *.tar.gz
+*.exe
+*.zip
+*.spec
 
 # Python caches & virtual environments
 __pycache__/

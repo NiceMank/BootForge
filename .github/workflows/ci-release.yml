@@ -1,4 +1,4 @@
-name: CI & Linux Package
+name: CI & Multiplatform Releases
 
 on:
   push:
@@ -11,7 +11,8 @@ permissions:
   contents: write
 
 jobs:
-  test-and-package:
+  build-linux:
+    name: Build Linux (.deb & portable tar.gz)
     runs-on: ubuntu-latest
 
     steps:
@@ -33,7 +34,7 @@ jobs:
 
       - name: Syntax check & unit tests
         run: |
-          python3 -m compileall -q bootforge_ui engine
+          python3 -m compileall -q bootforge_ui bootforge_win engine
           python3 -m unittest discover -s engine/tests -v
           desktop-file-validate data/io.github.nicemank.BootForge.desktop
 
@@ -42,18 +43,153 @@ jobs:
           bash packaging/build_deb.sh
           dpkg-deb --info release/*.deb
 
-      - name: Upload build artifacts
+      - name: Upload Linux packages
         uses: actions/upload-artifact@v4
         with:
           name: bootforge-linux-packages
           path: |
             release/*.deb
             release/*.tar.gz
+          if-no-files-found: error
 
-      - name: Attach packages to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+  build-windows:
+    name: Build Windows (Setup .exe & portable .zip)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller PyQt6
+
+      - name: Run Windows test suite
+        run: |
+          python -m unittest discover -s engine/tests -v
+
+      - name: Build Windows binary and portable ZIP
+        run: |
+          python packaging/build_windows.py
+
+      - name: Setup NSIS
+        shell: pwsh
+        run: |
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue)) {
+            if (Test-Path "C:\Program Files (x86)\NSIS\makensis.exe") {
+              echo "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            } else {
+              choco install nsis -y
+              echo "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            }
+          }
+
+      - name: Compile NSIS Installer (.exe)
+        shell: pwsh
+        run: |
+          makensis -DVERSION=1.0.0 packaging/win_installer.nsi
+          Get-ChildItem -Path release
+
+      - name: Upload Windows packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: bootforge-windows-packages
+          path: |
+            release/*-win64-setup.exe
+            release/*-win64-portable.zip
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish Official Multiplatform Release
+    needs: [build-linux, build-windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: bootforge-linux-packages
+          path: dist-release
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: bootforge-windows-packages
+          path: dist-release
+
+      - name: Generate Checksums & Release Notes
+        id: notes
+        run: |
+          cd dist-release
+          ls -la
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          echo "CHECKSUMS<<EOF" >> $GITHUB_ENV
+          cat SHA256SUMS.txt >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          name: BootForge ${{ github.ref_name }}
+          draft: false
+          prerelease: false
           files: |
-            release/*.deb
-            release/*.tar.gz
+            dist-release/*
+          body: |
+            ## 🚀 BootForge ${{ github.ref_name }} — Studio USB Bootable & Multi-Boot (Linux & Windows)
+
+            BootForge est une suite complète de création et gestion de clés USB bootables pour **Linux** et **Windows 10/11**, offrant une double compatibilité **Flash Direct (Rufus)** et **Multi-Boot dynamique (Ventoy)** avec un basculement ergonomique **Mode Simple** (grand public) et **Mode Avancé** (utilisateurs chevronnés).
+
+            ### 📦 Paquets disponibles au téléchargement
+
+            #### 🐧 Linux (Ubuntu, Debian, Linux Mint, Pop!_OS, Fedora, Arch...)
+            - **`bootforge_1.0.0_all.deb`** : Paquet d'installation natif Debian/Ubuntu avec intégration bureau, icônes hicolor et raccourcis.
+            - **`BootForge-1.0.0-linux.tar.gz`** : Archive portable autonome prête à l'emploi (`./bootforge`).
+
+            #### 🪟 Windows (Windows 10 / Windows 11 - 64 bits)
+            - **`BootForge-1.0.0-win64-setup.exe`** : Programme d'installation Windows classique avec raccourcis Menu Démarrer et Bureau.
+            - **`BootForge-1.0.0-win64-portable.zip`** : Version portable sans installation, à décompresser et lancer directement (`BootForge.exe`).
+
+            ---
+
+            ### ✨ Fonctionnalités clés
+
+            1. **Flash Direct (Compatible Rufus)** :
+               - Partitionnement GPT (UEFI) ou MBR (BIOS hérité / CSM).
+               - Système de fichiers NTFS + EFI:NTFS, FAT32 avec découpe automatique des gros `install.wim` (> 4 Go), exFAT ou mode Image brute (DD).
+               - **Suite Windows 11** : Contournement matériel TPM 2.0 / Secure Boot / RAM 4 Go, création de compte local (contournement compte Microsoft obligatoire), désactivation BitLocker automatique et injection de pilotes `$WinPEDriver$`.
+
+            2. **Multi-Boot (Compatible Ventoy)** :
+               - Placez autant d'images ISO que souhaité sur une même clé USB sans formatage répété.
+               - Support Secure Boot (partition VTOYEFI).
+               - Personnalisation graphique et menu `ventoy.json` (alias par ISO, démarrage par défaut, contournements Windows 11).
+
+            3. **Boîte à outils USB complète** :
+               - Calculateur d'empreintes d'intégrité en streaming (`SHA-256`, `SHA-1`, `MD5`).
+               - Test de débit séquentiel réel (Mo/s).
+               - Détection de secteurs défectueux (`badblocks` avec avertissement rouge destructeur).
+               - Remise à zéro d'usine (effacement des signatures MBR/GPT et reformatage FAT32/exFAT).
+               - Sauvegarde et restauration d'image disque complète (`.img` / `.img.gz`).
+               - Test instantané en machine virtuelle QEMU (UEFI OVMF ou BIOS hérité).
+
+            4. **Catalogue officiel d'OS** :
+               - Téléchargement direct en un clic d'images vérifiées : Windows 11, Ubuntu 24.04 LTS, Linux Mint, Debian 12, Fedora, Arch Linux, Kali Linux, Proxmox VE, Clonezilla, SystemRescue, etc.
+
+            ---
+
+            ### 🔒 Intégrité des binaires (SHA-256)
+
+            ```text
+            ${{ env.CHECKSUMS }}
+            ```
