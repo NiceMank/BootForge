@@ -14,6 +14,7 @@ gi.require_version("Gio", "2.0")
 from gi.repository import Adw, Gdk, Gio, Gtk
 
 from engine.disk_utils import plan_partition_layout, sanitize_volume_label
+from engine.i18n import t
 from engine.iso_inspector import inspect_image
 from bootforge_ui.backend import run_async
 from bootforge_ui.theme import esc, format_bytes, make_icon_button, set_button_text
@@ -325,6 +326,16 @@ class DirectFlashView(Gtk.ScrolledWindow):
         self.set_child(self._clamp)
         self.set_simple_mode(True)
 
+    def apply_language(self) -> None:
+        """Update localized strings."""
+        set_button_text(self._pick_iso_btn, t("catalog_btn_browse"))
+        set_button_text(self._btn_dry, t("direct_btn_dry"))
+        self._analyze_btn.set_label(t("direct_btn_analyze"))
+        self._sw_win_simple.set_title(t("direct_s_win_tweaks_row"))
+        self._sw_win_simple.set_subtitle(t("direct_s_win_tweaks_sub"))
+        self._row_win_tweaks.set_title(t("direct_a_win_tweaks_row"))
+        self.set_simple_mode(self._simple_mode)
+
     def set_simple_mode(self, simple: bool) -> None:
         self._simple_mode = simple
         if simple:
@@ -332,41 +343,41 @@ class DirectFlashView(Gtk.ScrolledWindow):
             self._cols.set_orientation(Gtk.Orientation.VERTICAL)
             self._cols.set_homogeneous(False)
 
-            self._grp_iso.set_title(esc("1. Choisir le système à mettre sur la clé"))
-            self._grp_iso.set_description(esc("Sélectionnez le fichier .iso ou .img que vous avez téléchargé."))
-            self._drop_lbl.set_label("Glissez un fichier .iso ou .img ici, ou cliquez sur Choisir")
+            self._grp_iso.set_title(esc(t("direct_s_step1_title")))
+            self._grp_iso.set_description(esc(t("direct_s_step1_desc")))
+            self._drop_lbl.set_label(t("direct_s_drop_label"))
 
-            self._grp_fmt.set_title(esc("2. Réglages de la clé"))
-            self._grp_fmt.set_description(esc("Les options techniques sont choisies automatiquement selon votre fichier."))
-            self._entry_label.set_title("Nom de la clé (facultatif)")
+            self._grp_fmt.set_title(esc(t("direct_s_step2_title")))
+            self._grp_fmt.set_description(esc(t("direct_s_step2_desc")))
+            self._entry_label.set_title(t("direct_s_label_title"))
 
-            self._grp_win.set_title(esc("Options Windows"))
-            self._grp_persist.set_title(esc("Conserver vos fichiers personnels"))
-            self._grp_persist.set_description(esc("Optionnel : réserve un espace sur la clé pour garder vos documents Linux."))
-            self._spin_persist.set_title("Espace de sauvegarde (Go)")
-            self._spin_persist.set_subtitle("Laissez sur 0 pour une clé d’installation classique")
+            self._grp_win.set_title(esc(t("direct_s_win_title")))
+            self._grp_persist.set_title(esc(t("direct_s_persist_title")))
+            self._grp_persist.set_description(esc(t("direct_s_persist_desc")))
+            self._spin_persist.set_title(t("direct_s_persist_size"))
+            self._spin_persist.set_subtitle(t("direct_s_persist_sub"))
 
-            set_button_text(self._btn_flash, "Créer la clé démarrable")
+            set_button_text(self._btn_flash, t("direct_s_btn_flash"))
         else:
             self._clamp.set_maximum_size(1180)
             self._cols.set_orientation(Gtk.Orientation.HORIZONTAL)
             self._cols.set_homogeneous(True)
 
-            self._grp_iso.set_title(esc("Image source (ISO / IMG / RAW)"))
-            self._grp_iso.set_description(esc("Inspecte l’image sans la monter pour adapter le schéma et le formatage."))
-            self._drop_lbl.set_label("Glissez un fichier .iso / .img ici ou sélectionnez-le")
+            self._grp_iso.set_title(esc(t("direct_a_step1_title")))
+            self._grp_iso.set_description(esc(t("direct_a_step1_desc")))
+            self._drop_lbl.set_label(t("direct_a_drop_label"))
 
-            self._grp_fmt.set_title(esc("Paramètres de formatage"))
-            self._grp_fmt.set_description(esc("Schéma GPT/MBR, chargeur UEFI:NTFS, découpe WIM ou écriture brute DD."))
-            self._entry_label.set_title("Nom du volume")
+            self._grp_fmt.set_title(esc(t("direct_a_step2_title")))
+            self._grp_fmt.set_description(esc(t("direct_a_step2_desc")))
+            self._entry_label.set_title(t("direct_a_label_title"))
 
-            self._grp_win.set_title(esc("Installation Windows 11 (autounattend.xml)"))
-            self._grp_persist.set_title(esc("Persistance Live Linux (ext4)"))
-            self._grp_persist.set_description(esc("Ajoute une partition ext4 en fin de clé pour conserver les données."))
-            self._spin_persist.set_title("Taille de persistance (Gio)")
-            self._spin_persist.set_subtitle("0 Gio = aucune partition de persistance")
+            self._grp_win.set_title(esc(t("direct_a_win_title")))
+            self._grp_persist.set_title(esc(t("direct_a_persist_title")))
+            self._grp_persist.set_description(esc(t("direct_a_persist_desc")))
+            self._spin_persist.set_title(t("direct_a_persist_size"))
+            self._spin_persist.set_subtitle(t("direct_a_persist_sub"))
 
-            set_button_text(self._btn_flash, "Démarrer le flash")
+            set_button_text(self._btn_flash, t("direct_a_btn_flash"))
 
         # Toggle expert-only rows cleanly
         self._iso_entry.set_visible(not simple)

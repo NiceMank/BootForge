@@ -27,6 +27,7 @@ from bootforge_win.backend import AsyncHelper
 from bootforge_win.dialogs import ConfirmDestroyDialog, WinTweaksDialog
 from bootforge_win.theme import PartitionMapWidget, format_bytes
 from engine.disk_utils import plan_partition_layout, sanitize_volume_label
+from engine.i18n import format_bytes_i18n, get_current_language, t
 from engine.iso_inspector import inspect_image
 
 
@@ -354,27 +355,34 @@ class DirectFlashWinView(QWidget):
 
         main_layout.addLayout(h_foot)
 
+    def apply_language(self) -> None:
+        self.set_simple_mode(self._simple_mode)
+
     def set_simple_mode(self, simple: bool) -> None:
         self._simple_mode = simple
 
         if simple:
             self._cols_layout.setDirection(QBoxLayout.Direction.TopToBottom)
             self._cols_layout.setSpacing(14)
-            self._lbl_iso_title.setText("1. Choisir le système à mettre sur la clé")
-            self._lbl_iso_desc.setText("Sélectionnez le fichier .iso ou .img que vous avez téléchargé.")
-            self._lbl_fmt_title.setText("2. Réglages de la clé")
-            self._lbl_fmt_desc.setText("Les options techniques sont choisies automatiquement selon votre fichier.")
-            self._lbl_name_tag.setText("Nom de la clé (facultatif) :")
-            self._btn_flash.setText("Créer la clé démarrable")
+            self._lbl_iso_title.setText(t("direct_s_step1_title"))
+            self._lbl_iso_desc.setText(t("direct_s_step1_desc"))
+            self._lbl_fmt_title.setText(t("direct_s_step2_title"))
+            self._lbl_fmt_desc.setText(t("direct_s_step2_desc"))
+            self._lbl_name_tag.setText(t("direct_volume_label"))
+            self._btn_flash.setText(t("direct_btn_start"))
         else:
             self._cols_layout.setDirection(QBoxLayout.Direction.LeftToRight)
             self._cols_layout.setSpacing(16)
-            self._lbl_iso_title.setText("Image source (ISO / IMG / RAW)")
-            self._lbl_iso_desc.setText("Inspection directe sans montage physique pour adapter le schéma.")
-            self._lbl_fmt_title.setText("Paramètres de formatage")
-            self._lbl_fmt_desc.setText("Schéma GPT/MBR, chargeur UEFI:NTFS, découpe WIM ou écriture bloc DD.")
-            self._lbl_name_tag.setText("Nom du volume :")
-            self._btn_flash.setText("Démarrer le flash")
+            self._lbl_iso_title.setText(t("direct_adv_group_src"))
+            self._lbl_iso_desc.setText(t("direct_s_step1_desc"))
+            self._lbl_fmt_title.setText(t("direct_adv_group_tgt"))
+            self._lbl_fmt_desc.setText(t("direct_s_step2_desc"))
+            self._lbl_name_tag.setText(t("direct_volume_label"))
+            self._btn_flash.setText(t("direct_btn_start"))
+
+        self._lbl_drop.setText(t("direct_drop_title").split("\n")[0])
+        self._chk_win_simple.setText(t("direct_win11_tweak_chk"))
+        self._btn_dry.setText(t("direct_btn_dry"))
 
         # Toggle visibility of advanced controls
         self._iso_path_row.setVisible(not simple)

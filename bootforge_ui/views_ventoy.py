@@ -15,6 +15,7 @@ gi.require_version("Gio", "2.0")
 from gi.repository import Adw, Gdk, Gio, Gtk
 
 from engine.disk_utils import plan_partition_layout, sanitize_volume_label
+from engine.i18n import t
 from engine.ventoy_manager import build_ventoy_json
 from bootforge_ui.backend import read_ventoy_state_on_device, run_async
 from bootforge_ui.theme import esc, format_bytes, make_icon_button, set_button_text
@@ -266,6 +267,17 @@ class MultiBootView(Gtk.ScrolledWindow):
         self.set_simple_mode(True)
         self._on_device_changed_reset()
 
+    def apply_language(self) -> None:
+        """Update localized strings."""
+        set_button_text(self._btn_read_usb, t("ventoy_btn_read_usb"))
+        set_button_text(self._btn_json, t("ventoy_btn_json"))
+        set_button_text(self._btn_dry, t("direct_btn_dry"))
+        self._sw_win_simple.set_title(t("ventoy_s_win_tweaks_row"))
+        self._sw_win_simple.set_subtitle(t("ventoy_s_win_tweaks_sub"))
+        self._row_update.set_title(t("ventoy_a_act_update_title"))
+        self._row_update.set_subtitle(t("ventoy_a_act_update_sub"))
+        self.set_simple_mode(self._simple_mode)
+
     def set_simple_mode(self, simple: bool) -> None:
         self._simple_mode = simple
         rules_target = self._left_col if simple else self._right_col
@@ -280,49 +292,45 @@ class MultiBootView(Gtk.ScrolledWindow):
             self._cols.set_orientation(Gtk.Orientation.VERTICAL)
             self._cols.set_homogeneous(False)
 
-            self._grp_action.set_title(esc("1. Que voulez-vous faire sur la clé ?"))
-            self._grp_action.set_description(
-                esc("Placez plusieurs systèmes (Windows, Ubuntu, etc.) sur une même clé USB avec un menu au démarrage.")
-            )
-            self._row_apply.set_title("Ajouter ou retirer des systèmes sans tout effacer")
-            self._row_apply.set_subtitle("Conserve les systèmes déjà copiés sur cette clé multi-systèmes")
-            self._row_install.set_title("Préparer une clé multi-systèmes de zéro (efface la clé)")
-            self._row_install.set_subtitle("Efface le contenu actuel pour préparer la clé à recevoir plusieurs systèmes")
+            self._grp_action.set_title(esc(t("ventoy_s_step1_title")))
+            self._grp_action.set_description(esc(t("ventoy_s_step1_desc")))
+            self._row_apply.set_title(t("ventoy_s_act_apply_title"))
+            self._row_apply.set_subtitle(t("ventoy_s_act_apply_sub"))
+            self._row_install.set_title(t("ventoy_s_act_install_title"))
+            self._row_install.set_subtitle(t("ventoy_s_act_install_sub"))
 
-            self._grp_rules.set_title(esc("2. Option pratique"))
+            self._grp_rules.set_title(esc(t("ventoy_s_step2_title")))
             self._grp_rules.set_description(esc(""))
 
-            self._q_title_lbl.set_label("3. Systèmes à mettre sur la clé")
-            self._q_sub_lbl.set_label("Ajoutez un ou plusieurs fichiers .iso (Windows, Ubuntu, Linux Mint...).")
+            self._q_title_lbl.set_label(t("ventoy_s_step3_title"))
+            self._q_sub_lbl.set_label(t("ventoy_s_step3_sub"))
             self._queue_scroll.set_vexpand(False)
             self._queue_scroll.set_min_content_height(140)
-            set_button_text(self._btn_add, "Ajouter un fichier")
-            self._empty_status.set_description(
-                "Cliquez sur « Ajouter un fichier » pour choisir vos images ISO, ou « Lire la clé » si elle est déjà prête."
-            )
+            set_button_text(self._btn_add, t("ventoy_btn_add_simple"))
+            set_button_text(self._btn_run, t("ventoy_btn_run_simple"))
+            self._empty_status.set_description(t("ventoy_empty_title"))
         else:
             self._clamp.set_maximum_size(1200)
             self._cols.set_orientation(Gtk.Orientation.HORIZONTAL)
             self._cols.set_homogeneous(True)
 
-            self._grp_action.set_title(esc("Opération Ventoy"))
-            self._grp_action.set_description(esc("Installe le chargeur multi-OS ou synchronise vos ISO sans formater."))
-            self._row_apply.set_title("Synchroniser les ISO, persistance et ventoy.json")
-            self._row_apply.set_subtitle("Conserve la partition de données et ajoute ou retire uniquement les fichiers demandés")
-            self._row_install.set_title("Installer Ventoy (initialisation complète)")
-            self._row_install.set_subtitle("Efface le disque entier et crée les partitions exFAT + VTOYEFI")
+            self._grp_action.set_title(esc(t("ventoy_a_step1_title")))
+            self._grp_action.set_description(esc(t("ventoy_a_step1_desc")))
+            self._row_apply.set_title(t("ventoy_a_act_apply_title"))
+            self._row_apply.set_subtitle(t("ventoy_a_act_apply_sub"))
+            self._row_install.set_title(t("ventoy_a_act_install_title"))
+            self._row_install.set_subtitle(t("ventoy_a_act_install_sub"))
 
-            self._grp_rules.set_title(esc("Règles globales (/ventoy/ventoy.json)"))
-            self._grp_rules.set_description(esc("Options écrites automatiquement dans la configuration Ventoy."))
+            self._grp_rules.set_title(esc(t("ventoy_a_step2_title")))
+            self._grp_rules.set_description(esc(t("ventoy_a_step2_desc")))
 
-            self._q_title_lbl.set_label("File Multi-Boot et réglages par ISO")
-            self._q_sub_lbl.set_label("Définissez alias, démarrage par défaut, persistance .dat ou autounattend.xml.")
+            self._q_title_lbl.set_label(t("ventoy_a_step3_title"))
+            self._q_sub_lbl.set_label(t("ventoy_a_step3_sub"))
             self._queue_scroll.set_vexpand(False)
             self._queue_scroll.set_min_content_height(150)
-            set_button_text(self._btn_add, "Ajouter ISO")
-            self._empty_status.set_description(
-                "Ajoutez des images ISO dans la file, ou cliquez sur « Lire la clé » si Ventoy est déjà installé."
-            )
+            set_button_text(self._btn_add, t("ventoy_btn_add_adv"))
+            set_button_text(self._btn_run, t("ventoy_btn_run_adv"))
+            self._empty_status.set_description(t("ventoy_empty_title"))
 
         self._row_update.set_visible(not simple)
         if simple and self._action_mode == "ventoy_update":
@@ -555,14 +563,14 @@ class MultiBootView(Gtk.ScrolledWindow):
             )
             row.set_icon_name("computer-symbolic" if entry["os_hint"] == "windows" else "applications-system-symbolic")
 
-            badge_lbl = ("Sur la clé" if entry["on_usb"] else "Ajouté") if self._simple_mode else ("USB" if entry["on_usb"] else "NOUVEAU")
+            badge_lbl = t("ventoy_item_on_usb") if entry["on_usb"] else t("ventoy_item_queued")
             badge = Gtk.Label(label=badge_lbl)
             badge.add_css_class("bf-status-pill")
             badge.add_css_class("bf-pill-ok" if entry["on_usb"] else "bf-pill-cyan")
             badge.set_valign(Gtk.Align.CENTER)
             row.add_suffix(badge)
 
-            del_btn = Gtk.Button(icon_name="user-trash-symbolic", tooltip_text="Retirer")
+            del_btn = Gtk.Button(icon_name="user-trash-symbolic", tooltip_text=t("ventoy_item_remove"))
             del_btn.add_css_class("flat")
             del_btn.set_valign(Gtk.Align.CENTER)
             del_btn.connect("clicked", lambda _b, item=entry: self._remove_entry(item))
@@ -570,7 +578,7 @@ class MultiBootView(Gtk.ScrolledWindow):
 
             alias_row = Adw.EntryRow(
                 use_markup=False,
-                title="Nom affiché au démarrage (facultatif)" if self._simple_mode else "Nom affiché dans le menu Ventoy (Alias)",
+                title=t("ventoy_item_alias"),
             )
             alias_row.set_text(entry.get("alias", ""))
             alias_row.connect("changed", lambda e, item=entry: item.__setitem__("alias", e.get_text()))
@@ -578,7 +586,7 @@ class MultiBootView(Gtk.ScrolledWindow):
 
             def_row = Adw.SwitchRow(
                 use_markup=False,
-                title="Démarrer ce système en premier" if self._simple_mode else "Image sélectionnée par défaut",
+                title=t("ventoy_item_default"),
             )
             def_row.set_active(bool(entry.get("default_img", False)))
 

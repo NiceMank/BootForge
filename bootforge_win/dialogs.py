@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
 from bootforge_ui import __version__
 from bootforge_win.theme import RESOURCE_ROOT, format_bytes
 from engine.disk_utils import check_system_dependencies
+from engine.i18n import get_current_language, t
 from engine.unattend_builder import build_autounattend_xml
 
 
@@ -34,7 +35,7 @@ class WinTweaksDialog(QDialog):
 
     def __init__(self, current_opts: Dict[str, Any], on_apply: Callable[[Dict[str, Any]], None], parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Paramètres Windows 11 (autounattend.xml)")
+        self.setWindowTitle(t("dialog_tweaks_title"))
         self.setMinimumSize(660, 580)
         self.resize(700, 620)
         self._on_apply = on_apply
@@ -66,35 +67,35 @@ class WinTweaksDialog(QDialog):
         b_lay.setContentsMargins(14, 14, 14, 14)
         b_lay.setSpacing(10)
 
-        lbl_b_title = QLabel("Contournements Windows 11 (24H2 / 25H2)")
+        lbl_b_title = QLabel(t("dialog_tweaks_grp_bypass"))
         lbl_b_title.setObjectName("GroupTitle")
         b_lay.addWidget(lbl_b_title)
 
-        self._chk_enabled = QCheckBox("Activer l'injection autounattend.xml sur la clé")
+        self._chk_enabled = QCheckBox(t("dialog_tweaks_chk_enabled"))
         self._chk_enabled.setChecked(bool(self._opts.get("enabled", True)))
         b_lay.addWidget(self._chk_enabled)
 
-        self._chk_hw = QCheckBox("Ignorer TPM 2.0, Secure Boot, RAM et CPU (BypassTPMCheck)")
+        self._chk_hw = QCheckBox(t("dialog_tweaks_chk_hw"))
         self._chk_hw.setChecked(bool(self._opts.get("bypass_tpm_secureboot_ram", True)))
         b_lay.addWidget(self._chk_hw)
 
-        self._chk_nro = QCheckBox("Autoriser l'installation sans compte Microsoft (BypassNRO)")
+        self._chk_nro = QCheckBox(t("dialog_tweaks_chk_nro"))
         self._chk_nro.setChecked(bool(self._opts.get("bypass_microsoft_account", True)))
         b_lay.addWidget(self._chk_nro)
 
-        self._chk_bitlocker = QCheckBox("Désactiver le chiffrement automatique BitLocker")
+        self._chk_bitlocker = QCheckBox(t("dialog_tweaks_chk_bitlocker"))
         self._chk_bitlocker.setChecked(bool(self._opts.get("disable_bitlocker", True)))
         b_lay.addWidget(self._chk_bitlocker)
 
-        self._chk_telemetry = QCheckBox("Désactiver les questions de télémétrie et suivi")
+        self._chk_telemetry = QCheckBox(t("dialog_tweaks_chk_telemetry"))
         self._chk_telemetry.setChecked(bool(self._opts.get("disable_telemetry", True)))
         b_lay.addWidget(self._chk_telemetry)
 
-        self._chk_bloat = QCheckBox("Désactiver les applications suggérées et widgets promotionnels")
+        self._chk_bloat = QCheckBox(t("dialog_tweaks_chk_bloat"))
         self._chk_bloat.setChecked(bool(self._opts.get("disable_consumer_bloat", False)))
         b_lay.addWidget(self._chk_bloat)
 
-        self._chk_key = QCheckBox("Passer l'écran de saisie de clé produit (activation ultérieure)")
+        self._chk_key = QCheckBox(t("dialog_tweaks_chk_key"))
         self._chk_key.setChecked(bool(self._opts.get("skip_product_key", True)))
         b_lay.addWidget(self._chk_key)
 
@@ -107,34 +108,34 @@ class WinTweaksDialog(QDialog):
         a_lay.setContentsMargins(14, 14, 14, 14)
         a_lay.setSpacing(10)
 
-        lbl_a_title = QLabel("Compte local et langue")
+        lbl_a_title = QLabel(t("dialog_tweaks_grp_acct"))
         lbl_a_title.setObjectName("GroupTitle")
         a_lay.addWidget(lbl_a_title)
 
-        self._chk_local = QCheckBox("Créer un compte administrateur local automatiquement")
+        self._chk_local = QCheckBox(t("dialog_tweaks_chk_local"))
         self._chk_local.setChecked(bool(self._opts.get("create_local_account", False)))
         self._chk_local.toggled.connect(self._sync_local_fields)
         a_lay.addWidget(self._chk_local)
 
         h_user = QHBoxLayout()
-        h_user.addWidget(QLabel("Nom d'utilisateur :"))
+        h_user.addWidget(QLabel(t("dialog_tweaks_lbl_user")))
         self._txt_user = QLineEdit(str(self._opts.get("local_username") or "Utilisateur"))
         h_user.addWidget(self._txt_user)
         a_lay.addLayout(h_user)
 
         h_pass = QHBoxLayout()
-        h_pass.addWidget(QLabel("Mot de passe (optionnel) :"))
+        h_pass.addWidget(QLabel(t("dialog_tweaks_lbl_pass")))
         self._txt_pass = QLineEdit(str(self._opts.get("local_password") or ""))
         self._txt_pass.setEchoMode(QLineEdit.EchoMode.Password)
         h_pass.addWidget(self._txt_pass)
         a_lay.addLayout(h_pass)
 
         h_loc = QHBoxLayout()
-        h_loc.addWidget(QLabel("Langue et clavier :"))
+        h_loc.addWidget(QLabel(t("dialog_tweaks_lbl_loc")))
         self._cmb_loc = QComboBox()
         self._loc_keys = ["fr-FR", "en-US", "fr-CA", "fr-BE", "fr-CH"]
         self._cmb_loc.addItems(["Français (fr-FR)", "English (en-US)", "Français Canada (fr-CA)", "Français Belgique (fr-BE)", "Français Suisse (fr-CH)"])
-        cur_l = str(self._opts.get("locale") or "fr-FR")
+        cur_l = str(self._opts.get("locale") or ("en-US" if get_current_language() == "en" else "fr-FR"))
         if cur_l in self._loc_keys:
             self._cmb_loc.setCurrentIndex(self._loc_keys.index(cur_l))
         h_loc.addWidget(self._cmb_loc)
@@ -145,7 +146,7 @@ class WinTweaksDialog(QDialog):
 
         scroll.setWidget(scroll_content)
         v_opts.addWidget(scroll)
-        self._tabs.addTab(tab_opts, "Options")
+        self._tabs.addTab(tab_opts, t("dialog_tweaks_tab_opts"))
 
         # Tab 2: XML Preview
         tab_xml = QWidget()
@@ -154,8 +155,8 @@ class WinTweaksDialog(QDialog):
         v_xml.setSpacing(8)
 
         h_xml_top = QHBoxLayout()
-        h_xml_top.addWidget(QLabel("Aperçu généré pour autounattend.xml :"))
-        btn_copy_xml = QPushButton("Copier le code XML")
+        h_xml_top.addWidget(QLabel(t("dialog_tweaks_lbl_xml_preview")))
+        btn_copy_xml = QPushButton(t("dialog_tweaks_btn_copy_xml"))
         btn_copy_xml.clicked.connect(self._copy_xml)
         h_xml_top.addWidget(btn_copy_xml)
         v_xml.addLayout(h_xml_top)
@@ -165,17 +166,17 @@ class WinTweaksDialog(QDialog):
         self._xml_view.setReadOnly(True)
         v_xml.addWidget(self._xml_view)
 
-        self._tabs.addTab(tab_xml, "Aperçu XML")
+        self._tabs.addTab(tab_xml, t("dialog_tweaks_tab_xml"))
         self._tabs.currentChanged.connect(self._on_tab_changed)
 
         # Footer Buttons
         h_btns = QHBoxLayout()
         h_btns.addStretch()
-        btn_cancel = QPushButton("Annuler")
+        btn_cancel = QPushButton(t("dialog_tweaks_btn_cancel"))
         btn_cancel.clicked.connect(self.reject)
         h_btns.addWidget(btn_cancel)
 
-        btn_save = QPushButton("Enregistrer les options")
+        btn_save = QPushButton(t("dialog_tweaks_btn_save"))
         btn_save.setObjectName("PrimaryBtn")
         btn_save.clicked.connect(self._handle_save)
         h_btns.addWidget(btn_save)
@@ -237,7 +238,7 @@ class ConfirmDestroyDialog(QDialog):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Confirmer l'effacement" if simple_mode else "Confirmation requise")
+        self.setWindowTitle(t("dialog_confirm_title_simple") if simple_mode else t("dialog_confirm_title_adv"))
         self.setMinimumWidth(480)
         self._on_confirmed = on_confirmed
 
@@ -259,9 +260,9 @@ class ConfirmDestroyDialog(QDialog):
         b_lay.addWidget(lbl_icon)
 
         intro = (
-            f"Tout le contenu de cette clé USB va être effacé.\n{detail_msg}"
+            t("dialog_confirm_intro_simple", detail=detail_msg)
             if simple_mode
-            else f"Toutes les partitions existantes sur ce disque vont être supprimées.\n{detail_msg}"
+            else t("dialog_confirm_intro_adv", detail=detail_msg)
         )
         lbl_msg = QLabel(intro)
         lbl_msg.setWordWrap(True)
@@ -275,28 +276,29 @@ class ConfirmDestroyDialog(QDialog):
         i_lay.setContentsMargins(12, 12, 12, 12)
         i_lay.setSpacing(6)
 
-        i_lay.addWidget(QLabel(f"Action : <b>{operation_title}</b>"))
+        i_lay.addWidget(QLabel(t("dialog_confirm_action_lbl", action=operation_title)))
         dev_desc = (
-            f"{device.get('model', 'Clé USB')} ({format_bytes(device.get('size_bytes', 0))})"
+            f"{device.get('model', 'USB')} ({format_bytes(device.get('size_bytes', 0))})"
             if simple_mode
-            else f"{device.get('model', 'Disque')} ({device.get('path', '')}) · {format_bytes(device.get('size_bytes', 0))}"
+            else f"{device.get('model', 'Disk')} ({device.get('path', '')}) · {format_bytes(device.get('size_bytes', 0))}"
         )
-        i_lay.addWidget(QLabel(f"Périphérique cible : <b>{dev_desc}</b>"))
+        i_lay.addWidget(QLabel(t("dialog_confirm_target_lbl", dev=dev_desc)))
         root.addWidget(info_card)
 
         # Typing confirmation
-        root.addWidget(QLabel("Pour confirmer l'opération, tapez <b>EFFACER</b> ci-dessous :"))
+        prompt_txt = t("dialog_confirm_prompt_msg", word=t("dialog_confirm_word"))
+        root.addWidget(QLabel(prompt_txt))
         self._txt_confirm = QLineEdit()
-        self._txt_confirm.setPlaceholderText("EFFACER")
+        self._txt_confirm.setPlaceholderText(t("dialog_confirm_word"))
         root.addWidget(self._txt_confirm)
 
         h_btns = QHBoxLayout()
         h_btns.addStretch()
-        btn_cancel = QPushButton("Annuler")
+        btn_cancel = QPushButton(t("dialog_confirm_btn_cancel"))
         btn_cancel.clicked.connect(self.reject)
         h_btns.addWidget(btn_cancel)
 
-        self._btn_exec = QPushButton("Effacer et démarrer")
+        self._btn_exec = QPushButton(t("dialog_confirm_btn_exec"))
         self._btn_exec.setObjectName("DangerBtn")
         self._btn_exec.setEnabled(False)
         self._btn_exec.clicked.connect(self._accept_and_run)
@@ -307,10 +309,10 @@ class ConfirmDestroyDialog(QDialog):
         self._txt_confirm.returnPressed.connect(self._accept_and_run)
 
     def _on_text_changed(self, text: str) -> None:
-        self._btn_exec.setEnabled(text.strip().upper() == "EFFACER")
+        self._btn_exec.setEnabled(text.strip().upper() in ("EFFACER", "ERASE"))
 
     def _accept_and_run(self) -> None:
-        if self._txt_confirm.text().strip().upper() == "EFFACER":
+        if self._txt_confirm.text().strip().upper() in ("EFFACER", "ERASE"):
             self.accept()
             self._on_confirmed()
 
@@ -320,7 +322,7 @@ class PreflightDialog(QDialog):
 
     def __init__(self, deps: Optional[Dict[str, Any]], on_refresh: Callable[[], None], parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Outils système et composants")
+        self.setWindowTitle(t("dialog_preflight_win_title"))
         self.setMinimumSize(560, 480)
         self._on_refresh = on_refresh
 
@@ -343,7 +345,7 @@ class PreflightDialog(QDialog):
         g1 = QVBoxLayout(grp_core)
         g1.setContentsMargins(14, 14, 14, 14)
         g1.setSpacing(8)
-        lbl1 = QLabel("Outils Windows natifs indispensables")
+        lbl1 = QLabel(t("dialog_preflight_win_core"))
         lbl1.setObjectName("GroupTitle")
         g1.addWidget(lbl1)
 
@@ -351,7 +353,7 @@ class PreflightDialog(QDialog):
             h = QHBoxLayout()
             h.addWidget(QLabel(f"<b>{c['name']}</b> : {c['purpose']}"))
             h.addStretch()
-            status = QLabel("✅ Présent" if c["installed"] else "❌ Manquant")
+            status = QLabel(t("dialog_preflight_status_ok") if c["installed"] else t("dialog_preflight_status_miss"))
             h.addWidget(status)
             g1.addLayout(h)
         c_lay.addWidget(grp_core)
@@ -362,15 +364,15 @@ class PreflightDialog(QDialog):
         g2 = QVBoxLayout(grp_assets)
         g2.setContentsMargins(14, 14, 14, 14)
         g2.setSpacing(8)
-        lbl2 = QLabel("Composants BootForge embarqués")
+        lbl2 = QLabel(t("dialog_preflight_win_embedded"))
         lbl2.setObjectName("GroupTitle")
         g2.addWidget(lbl2)
 
         uefi_ok = bool(deps.get("uefi_ntfs_cached"))
         h_u = QHBoxLayout()
-        h_u.addWidget(QLabel("<b>Chargeur UEFI:NTFS</b> (démarrage Windows NTFS)"))
+        h_u.addWidget(QLabel(f"<b>{t('dialog_preflight_win_uefi')}</b>"))
         h_u.addStretch()
-        h_u.addWidget(QLabel("✅ Prêt" if uefi_ok else "⚡ Téléchargement auto"))
+        h_u.addWidget(QLabel(t("dialog_preflight_status_ready") if uefi_ok else t("dialog_preflight_status_dl")))
         g2.addLayout(h_u)
         c_lay.addWidget(grp_assets)
 
@@ -380,7 +382,7 @@ class PreflightDialog(QDialog):
         g3 = QVBoxLayout(grp_opt)
         g3.setContentsMargins(14, 14, 14, 14)
         g3.setSpacing(8)
-        lbl3 = QLabel("Outils facultatifs (recommandés)")
+        lbl3 = QLabel(t("dialog_preflight_win_opt"))
         lbl3.setObjectName("GroupTitle")
         g3.addWidget(lbl3)
 
@@ -389,7 +391,7 @@ class PreflightDialog(QDialog):
             cmd_note = f" (<code>{opt.get('install_cmd', '')}</code>)" if not opt["installed"] and opt.get("install_cmd") else ""
             h.addWidget(QLabel(f"<b>{opt['name']}</b> : {opt['purpose']}{cmd_note}"))
             h.addStretch()
-            h.addWidget(QLabel("✅ Installé" if opt["installed"] else "⚪ Optionnel"))
+            h.addWidget(QLabel(t("dialog_preflight_status_ok") if opt["installed"] else t("dialog_preflight_status_opt")))
             g3.addLayout(h)
         c_lay.addWidget(grp_opt)
 
@@ -398,10 +400,10 @@ class PreflightDialog(QDialog):
 
         h_bot = QHBoxLayout()
         h_bot.addStretch()
-        btn_ref = QPushButton("Actualiser")
+        btn_ref = QPushButton(t("dialog_preflight_btn_refresh"))
         btn_ref.clicked.connect(lambda: (self._on_refresh(), self.accept()))
         h_bot.addWidget(btn_ref)
-        btn_close = QPushButton("Fermer")
+        btn_close = QPushButton(t("dialog_preflight_btn_close"))
         btn_close.clicked.connect(self.accept)
         h_bot.addWidget(btn_close)
         root.addLayout(h_bot)
@@ -412,7 +414,7 @@ class JsonPreviewDialog(QDialog):
 
     def __init__(self, json_data: Dict[str, Any], parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Aperçu /ventoy/ventoy.json")
+        self.setWindowTitle(t("dialog_json_title"))
         self.setMinimumSize(580, 500)
 
         root = QVBoxLayout(self)
@@ -420,9 +422,9 @@ class JsonPreviewDialog(QDialog):
         root.setSpacing(10)
 
         h_top = QHBoxLayout()
-        h_top.addWidget(QLabel("Configuration générée automatiquement pour la clé Ventoy :"))
+        h_top.addWidget(QLabel(t("dialog_json_intro")))
         h_top.addStretch()
-        btn_cp = QPushButton("Copier")
+        btn_cp = QPushButton(t("dialog_json_btn_copy"))
         btn_cp.clicked.connect(self._copy)
         h_top.addWidget(btn_cp)
         root.addLayout(h_top)
@@ -436,7 +438,7 @@ class JsonPreviewDialog(QDialog):
 
         h_bot = QHBoxLayout()
         h_bot.addStretch()
-        btn_ok = QPushButton("Fermer")
+        btn_ok = QPushButton(t("dialog_json_btn_close"))
         btn_ok.clicked.connect(self.accept)
         h_bot.addWidget(btn_ok)
         root.addLayout(h_bot)
@@ -452,7 +454,7 @@ class AboutDialog(QDialog):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("À propos de BootForge")
+        self.setWindowTitle(t("dialog_about_title"))
         self.setFixedSize(480, 320)
 
         root = QVBoxLayout(self)
@@ -475,28 +477,25 @@ class AboutDialog(QDialog):
         lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root.addWidget(lbl_title)
 
-        lbl_ver = QLabel(f"Version {__version__} · Windows Edition (64 bits)")
+        lbl_ver = QLabel(t("dialog_about_edition_win", ver=__version__))
         lbl_ver.setObjectName("Muted")
         lbl_ver.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root.addWidget(lbl_ver)
 
-        lbl_desc = QLabel(
-            "Studio de création de clés USB bootables (Rufus direct) et multi-systèmes (Ventoy).\n"
-            "Conçu et développé par NiceMank."
-        )
+        lbl_desc = QLabel(t("dialog_about_desc"))
         lbl_desc.setWordWrap(True)
         lbl_desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root.addWidget(lbl_desc)
 
         lbl_links = QLabel(
-            '<a href="https://github.com/NiceMank/BootForge" style="color: #D92654; text-decoration: none;">Dépôt GitHub</a> &nbsp;·&nbsp; '
-            '<a href="https://github.com/NiceMank/BootForge/issues" style="color: #D92654; text-decoration: none;">Signaler un bug</a> &nbsp;·&nbsp; '
-            '<span style="color: #9BA3B4;">Licence GPL-3.0</span>'
+            f'<a href="https://github.com/NiceMank/BootForge" style="color: #D92654; text-decoration: none;">{t("dialog_about_link_repo")}</a> &nbsp;·&nbsp; '
+            f'<a href="https://github.com/NiceMank/BootForge/issues" style="color: #D92654; text-decoration: none;">{t("dialog_about_link_issues")}</a> &nbsp;·&nbsp; '
+            f'<span style="color: #9BA3B4;">{t("dialog_about_link_license")}</span>'
         )
         lbl_links.setOpenExternalLinks(True)
         lbl_links.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root.addWidget(lbl_links)
 
-        btn_close = QPushButton("Fermer")
+        btn_close = QPushButton(t("dialog_about_btn_close"))
         btn_close.clicked.connect(self.accept)
         root.addWidget(btn_close)

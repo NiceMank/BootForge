@@ -76,6 +76,11 @@ Un bouton de bascule instantané dans l'en-tête permet d'adapter l'interface à
   - **Experts & Sécurité** : Arch Linux, Kali Linux, Proxmox VE.
   - **Dépannage & Sauvegarde** : SystemRescue, GParted Live, Clonezilla.
 
+### 🌍 5. Interface bilingue en direct (Français et Anglais)
+- **Basculement instantané** : Changez de langue à tout moment entre le Français (`FR 🇫🇷`) et l'Anglais (`EN 🇬🇧`) depuis la barre de titre, sans redémarrer le logiciel.
+- **Traductions natives soignées** : Les 4 espaces de travail, les fenêtres d'options, les indicateurs d'état et les avertissements de sécurité sont intégralement traduits.
+- **Détection automatique du système** : Détecte la langue de votre système d'exploitation dès le premier lancement et mémorise votre préférence.
+
 ---
 
 ## 📥 Téléchargement et Installation
@@ -86,21 +91,21 @@ Rendez-vous sur la page des [Releases officielles](https://github.com/NiceMank/B
 
 #### Option A : Paquet `.deb` (Recommandé)
 ```bash
-sudo apt install ./bootforge_1.0.0_all.deb
+sudo apt install ./bootforge_1.0.1_all.deb
 ```
 L'application s'ajoute automatiquement à votre menu d'applications GNOME / KDE / XFCE.
 
 #### Option B : Archive portable autonome
 ```bash
-tar -xzf BootForge-1.0.0-linux.tar.gz
-cd BootForge-1.0.0-linux
+tar -xzf BootForge-1.0.1-linux.tar.gz
+cd BootForge-1.0.1-linux
 ./bootforge
 ```
 
 ### 🪟 Pour Windows (Windows 10 / Windows 11 - 64 bits)
 
-- **Programme d'installation** : Téléchargez `BootForge-1.0.0-win64-setup.exe` et suivez l'assistant.
-- **Version portable** : Décompressez `BootForge-1.0.0-win64-portable.zip` et lancez `BootForge.exe`.
+- **Programme d'installation** : Téléchargez `BootForge-1.0.1-win64-setup.exe` et suivez l'assistant.
+- **Version portable** : Décompressez `BootForge-1.0.1-win64-portable.zip` et lancez `BootForge.exe`.
 
 ---
 
@@ -144,7 +149,7 @@ bash packaging/build_deb.sh
 ### Construire les paquets Windows
 ```powershell
 python packaging/build_windows.py
-makensis -DVERSION=1.0.0 packaging/win_installer.nsi
+makensis -DVERSION=1.0.1 packaging/win_installer.nsi
 ```
 
 ---

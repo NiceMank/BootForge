@@ -29,6 +29,7 @@ from bootforge_win.backend import AsyncHelper, read_ventoy_state_for_device
 from bootforge_win.dialogs import ConfirmDestroyDialog, JsonPreviewDialog
 from bootforge_win.theme import PartitionMapWidget, format_bytes
 from engine.disk_utils import plan_partition_layout, sanitize_volume_label
+from engine.i18n import format_bytes_i18n, get_current_language, t
 from engine.ventoy_manager import build_ventoy_json
 
 
@@ -294,33 +295,45 @@ class MultiBootWinView(QWidget):
 
         main_layout.addLayout(h_foot)
 
+    def apply_language(self) -> None:
+        self.set_simple_mode(self._simple_mode)
+
     def set_simple_mode(self, simple: bool) -> None:
         self._simple_mode = simple
 
         if simple:
             self._cols_layout.setDirection(QBoxLayout.Direction.TopToBottom)
             self._cols_layout.setSpacing(14)
-            self._lbl_act_title.setText("1. Que voulez-vous faire sur la clé ?")
-            self._lbl_act_desc.setText("Placez plusieurs systèmes (Windows, Ubuntu, etc.) sur la même clé USB.")
-            self._rad_install.setText("Préparer une clé multi-systèmes de zéro (efface la clé)")
-            self._rad_apply.setText("Ajouter ou retirer des systèmes sans tout effacer")
-            self._lbl_rules_title.setText("2. Option pratique")
-            self._lbl_q_title.setText("3. Systèmes à mettre sur la clé")
-            self._lbl_q_desc.setText("Ajoutez un ou plusieurs fichiers .iso (Windows, Ubuntu, Mint...).")
-            self._btn_add_iso.setText("+ Ajouter un fichier")
-            self._btn_run.setText("Préparer la clé")
+            self._lbl_act_title.setText(t("ventoy_s_step1_title"))
+            self._lbl_act_desc.setText(t("ventoy_s_step1_desc"))
+            self._rad_install.setText(t("ventoy_s_opt_fresh"))
+            self._rad_apply.setText(t("ventoy_s_opt_sync"))
+            self._lbl_rules_title.setText(t("ventoy_s_step2_title"))
+            self._lbl_q_title.setText(t("ventoy_s_step3_title"))
+            self._lbl_q_desc.setText(t("ventoy_s_step3_desc"))
+            self._btn_add_iso.setText(t("ventoy_btn_add"))
+            self._btn_run.setText(t("ventoy_btn_run_simple"))
         else:
             self._cols_layout.setDirection(QBoxLayout.Direction.LeftToRight)
             self._cols_layout.setSpacing(16)
-            self._lbl_act_title.setText("Opération Ventoy")
-            self._lbl_act_desc.setText("Installe le chargeur multi-OS ou synchronise vos images ISO.")
-            self._rad_install.setText("Installer Ventoy (initialisation complète du disque)")
-            self._rad_apply.setText("Synchroniser les ISO et ventoy.json (sans formater)")
-            self._lbl_rules_title.setText("Règles globales (/ventoy/ventoy.json)")
-            self._lbl_q_title.setText("File Multi-Boot et réglages par système")
-            self._lbl_q_desc.setText("Gérez les images, l'alias de menu et les profils de démarrage.")
-            self._btn_add_iso.setText("+ Ajouter ISO")
-            self._btn_run.setText("Exécuter Ventoy")
+            self._lbl_act_title.setText(t("ventoy_adv_act_title"))
+            self._lbl_act_desc.setText(t("ventoy_adv_act_desc"))
+            self._rad_install.setText(t("ventoy_adv_opt_install"))
+            self._rad_apply.setText(t("ventoy_adv_opt_apply"))
+            self._rad_update.setText(t("ventoy_adv_opt_update"))
+            self._lbl_rules_title.setText(t("ventoy_rules_title"))
+            self._lbl_q_title.setText(t("ventoy_queue_title"))
+            self._lbl_q_desc.setText(t("ventoy_queue_desc"))
+            self._btn_add_iso.setText(t("ventoy_btn_add_adv"))
+            self._btn_run.setText(t("ventoy_btn_run_adv"))
+
+        self._chk_win_simple.setText(t("ventoy_s_win11_chk"))
+        self._chk_win_nro.setText(t("ventoy_win11_nro_chk"))
+        self._chk_tree.setText(t("ventoy_tree_chk"))
+        self._chk_filter.setText(t("ventoy_filter_chk"))
+        self._btn_read_usb.setText(t("ventoy_btn_read"))
+        self._btn_json.setText(t("ventoy_btn_json"))
+        self._btn_dry.setText(t("direct_btn_dry"))
 
         self._rad_update.setVisible(not simple)
         self._card_cont.setVisible(not simple)
@@ -497,6 +510,7 @@ class MultiBootWinView(QWidget):
                 w.deleteLater()
 
         has_items = len(self._entries) > 0
+        self._lbl_empty.setText(t("ventoy_empty_title"))
         self._lbl_empty.setVisible(not has_items)
 
         for entry in self._entries:
@@ -508,26 +522,26 @@ class MultiBootWinView(QWidget):
 
             h_top = QHBoxLayout()
             os_ic = "🪟" if entry["os_hint"] == "windows" else "🐧"
-            loc_tag = "Déjà sur la clé" if entry["on_usb"] else "À copier"
+            loc_tag = t("ventoy_item_on_usb") if entry["on_usb"] else t("ventoy_item_queued")
             tag_col = "#10b981" if entry["on_usb"] else "#38bdf8"
-            lbl_n = QLabel(f"<b>{os_ic} {entry['name']}</b> ({format_bytes(entry['size_bytes'])}) · <span style='color: {tag_col};'>{loc_tag}</span>")
+            lbl_n = QLabel(f"<b>{os_ic} {entry['name']}</b> ({format_bytes_i18n(entry['size_bytes'])}) · <span style='color: {tag_col};'>{loc_tag}</span>")
             h_top.addWidget(lbl_n, 1)
 
-            btn_del = QPushButton("Retirer")
+            btn_del = QPushButton(t("ventoy_item_remove"))
             btn_del.clicked.connect(lambda _, item=entry: self._remove_entry(item))
             h_top.addWidget(btn_del)
             if_lay.addLayout(h_top)
 
             if not self._simple_mode:
                 h_mid = QHBoxLayout()
-                h_mid.addWidget(QLabel("Nom au menu :"))
+                h_mid.addWidget(QLabel(t("ventoy_item_alias")))
                 txt_al = QLineEdit(entry.get("alias", ""))
-                txt_al.setPlaceholderText("Nom personnalisé dans le menu de démarrage...")
-                txt_al.textChanged.connect(lambda t, item=entry: item.__setitem__("alias", t))
+                txt_al.setPlaceholderText(t("ventoy_item_alias_ph"))
+                txt_al.textChanged.connect(lambda t_val, item=entry: item.__setitem__("alias", t_val))
                 h_mid.addWidget(txt_al, 1)
                 if_lay.addLayout(h_mid)
 
-                chk_def = QCheckBox("Démarrer par défaut sur ce système")
+                chk_def = QCheckBox(t("ventoy_item_default"))
                 chk_def.setChecked(bool(entry.get("default_img", False)))
                 chk_def.toggled.connect(lambda c, item=entry: self._set_default_img(item, c))
                 if_lay.addWidget(chk_def)

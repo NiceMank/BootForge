@@ -15,6 +15,8 @@ gi.require_version("Gio", "2.0")
 from gi.repository import Adw, Gio, Gtk, Pango
 
 from bootforge_ui.backend import OFFICIAL_CATALOG, ActiveProcessController, default_downloads_dir
+from engine.catalog import get_localized_catalog
+from engine.i18n import get_current_language, t
 from bootforge_ui.theme import esc, make_icon_button
 
 
@@ -44,7 +46,7 @@ class CatalogView(Gtk.ScrolledWindow):
 
         self._simple_mode = True
         self._dest_dir = str(default_downloads_dir())
-        self._active_category = "Toutes"
+        self._active_category_idx = 0
         self._downloaded_paths: Dict[str, str] = {}
         self._dl_buttons: List[Gtk.Button] = []
         self._cat_buttons: List[Gtk.ToggleButton] = []
@@ -68,14 +70,14 @@ class CatalogView(Gtk.ScrolledWindow):
         spacer.set_hexpand(True)
         top_bar.append(spacer)
 
-        self._dest_lbl = Gtk.Label(label=f"Dossier : {self._dest_dir}")
+        self._dest_lbl = Gtk.Label(label=t("catalog_folder_lbl", path=self._dest_dir))
         self._dest_lbl.add_css_class("caption")
         self._dest_lbl.add_css_class("dim-label")
         self._dest_lbl.set_ellipsize(Pango.EllipsizeMode.END)
         self._dest_lbl.set_max_width_chars(36)
         top_bar.append(self._dest_lbl)
 
-        folder_btn = make_icon_button("Dossier...", "folder-open-symbolic")
+        folder_btn = make_icon_button(t("catalog_folder_btn"), "folder-open-symbolic")
         folder_btn.connect("clicked", self._pick_dest_folder)
         top_bar.append(folder_btn)
 
@@ -88,38 +90,55 @@ class CatalogView(Gtk.ScrolledWindow):
         self.set_child(self._clamp)
         self.set_simple_mode(True)
 
+    def apply_language(self) -> None:
+        """Update localized text and reload catalog items."""
+        self._dest_lbl.set_label(t("catalog_folder_lbl", path=self._dest_dir))
+        self._rebuild_category_buttons()
+        self._rebuild_rows()
+
     def set_simple_mode(self, simple: bool) -> None:
         self._simple_mode = simple
         self._clamp.set_maximum_size(860 if simple else 1100)
-        self._active_category = "Tous" if simple else "Toutes"
+        self._active_category_idx = 0
         self._rebuild_category_buttons()
         self._rebuild_rows()
+
+    def _get_category_labels(self) -> List[str]:
+        if self._simple_mode:
+            return [
+                t("catalog_cat_all_simple"),
+                t("catalog_cat_current_simple"),
+                t("catalog_cat_rescue_simple"),
+                t("catalog_cat_security_simple"),
+            ]
+        return [
+            t("catalog_cat_all_adv"),
+            t("catalog_cat_desktop_adv"),
+            t("catalog_cat_security_adv"),
+            t("catalog_cat_rescue_adv"),
+        ]
 
     def _rebuild_category_buttons(self) -> None:
         while child := self._linked.get_first_child():
             self._linked.remove(child)
         self._cat_buttons.clear()
 
-        cats = (
-            ["Tous", "Systèmes courants", "Dépannage", "Sécurité"]
-            if self._simple_mode
-            else ["Toutes", "Linux Desktop", "Sécurité & Pentest", "Secours & Disque"]
-        )
+        cats = self._get_category_labels()
         first_btn: Gtk.ToggleButton | None = None
-        for cat in cats:
+        for idx, cat in enumerate(cats):
             btn = Gtk.ToggleButton(label=cat)
-            if first_btn is None:
+            if idx == 0:
                 first_btn = btn
                 btn.set_active(True)
             else:
                 btn.set_group(first_btn)
-            btn.connect("toggled", lambda b, c=cat: self._on_category_toggled(b, c))
+            btn.connect("toggled", lambda b, i=idx: self._on_category_toggled(b, i))
             self._linked.append(btn)
             self._cat_buttons.append(btn)
 
-    def _on_category_toggled(self, btn: Gtk.ToggleButton, category: str) -> None:
+    def _on_category_toggled(self, btn: Gtk.ToggleButton, index: int) -> None:
         if btn.get_active():
-            self._active_category = category
+            self._active_category_idx = index
             self._rebuild_rows()
 
     def _pick_dest_folder(self, *_args: Any) -> None:
@@ -149,24 +168,22 @@ class CatalogView(Gtk.ScrolledWindow):
         assert isinstance(parent, Gtk.Box)
         parent.remove(self._group)
 
-        if self._simple_mode:
-            title = "Systèmes gratuits disponibles"
-            desc = "Téléchargement direct depuis les sites officiels. Prêts à copier sur une clé USB."
-            cat_key = "simple_category"
-            all_key = "Tous"
-        else:
-            title = "Images officielles vérifiées (HTTPS)"
-            desc = "Téléchargement direct depuis les miroirs officiels avec lien vers les sommes SHA-256."
-            cat_key = "category"
-            all_key = "Toutes"
+        title = t("catalog_title")
+        desc = t("catalog_desc")
+        cat_key = "simple_category" if self._simple_mode else "category"
 
         self._group = Adw.PreferencesGroup(title=esc(title), description=esc(desc))
         self._dl_buttons.clear()
 
+        cur_lang = get_current_language()
+        all_catalog = get_localized_catalog(cur_lang)
+        cat_labels = self._get_category_labels()
+        target_cat = cat_labels[self._active_category_idx] if self._active_category_idx < len(cat_labels) else cat_labels[0]
+
         items = [
             it
-            for it in OFFICIAL_CATALOG
-            if self._active_category == all_key or it.get(cat_key) == self._active_category
+            for it in all_catalog
+            if self._active_category_idx == 0 or it.get(cat_key) == target_cat
         ]
 
         for item in items:
@@ -179,7 +196,7 @@ class CatalogView(Gtk.ScrolledWindow):
 
             row = Adw.ActionRow(use_markup=False, title=row_title, subtitle=row_sub)
             row.set_icon_name(
-                "security-high-symbolic" if item["category"] == "Sécurité & Pentest" else "applications-system-symbolic"
+                "security-high-symbolic" if item["category"] in ("Sécurité & Pentest", "Security & Pentest") else "applications-system-symbolic"
             )
 
             if not self._simple_mode:
@@ -189,17 +206,17 @@ class CatalogView(Gtk.ScrolledWindow):
                 badge.set_valign(Gtk.Align.CENTER)
                 row.add_suffix(badge)
 
-                sha_btn = Gtk.Button(label="SHA-256")
+                sha_btn = Gtk.Button(label=t("catalog_btn_checksum"))
                 sha_btn.set_valign(Gtk.Align.CENTER)
                 sha_btn.connect("clicked", lambda _b, u=item["checksum_page"]: self._open_checksum_uri(u))
                 row.add_suffix(sha_btn)
 
             saved_path = self._downloaded_paths.get(item["id"])
             if saved_path and os.path.isfile(saved_path):
-                btn_use = Gtk.Button(label="Mettre sur une clé" if self._simple_mode else "Flash direct")
+                btn_use = Gtk.Button(label=t("catalog_btn_use_simple") if self._simple_mode else t("catalog_btn_use_adv"))
                 btn_use.set_valign(Gtk.Align.CENTER)
                 btn_use.connect("clicked", lambda _b, p=saved_path: self._on_use_in_direct(p))
-                btn_vtoy = Gtk.Button(label="+ Multi-systèmes" if self._simple_mode else "+ Ventoy")
+                btn_vtoy = Gtk.Button(label=t("catalog_btn_ventoy_simple") if self._simple_mode else t("catalog_btn_ventoy_adv"))
                 btn_vtoy.add_css_class("suggested-action")
                 btn_vtoy.set_valign(Gtk.Align.CENTER)
                 btn_vtoy.connect("clicked", lambda _b, p=saved_path: self._on_use_in_ventoy(p))
@@ -207,7 +224,7 @@ class CatalogView(Gtk.ScrolledWindow):
                 row.add_suffix(btn_vtoy)
             else:
                 dl_btn = make_icon_button(
-                    "Télécharger" if self._simple_mode else "Télécharger ISO",
+                    t("catalog_btn_dl_simple") if self._simple_mode else t("catalog_btn_dl_adv"),
                     "folder-download-symbolic",
                     ("suggested-action",),
                 )

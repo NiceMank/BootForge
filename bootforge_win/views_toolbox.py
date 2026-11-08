@@ -26,6 +26,7 @@ from bootforge_win.backend import WinTaskController
 from bootforge_win.dialogs import ConfirmDestroyDialog
 from bootforge_win.theme import format_bytes, format_speed
 from engine.disk_utils import sanitize_volume_label
+from engine.i18n import get_current_language, t
 
 
 class ToolboxWinView(QWidget):
@@ -81,19 +82,19 @@ class ToolboxWinView(QWidget):
 
         h_f = QHBoxLayout()
         self._txt_hash_file = QLineEdit()
-        self._txt_hash_file.setPlaceholderText("Fichier à vérifier (.iso, .img)...")
+        self._txt_hash_file.setPlaceholderText(t("toolbox_hash_file_ph"))
         h_f.addWidget(self._txt_hash_file, 1)
-        btn_pick_hf = QPushButton("Parcourir...")
-        btn_pick_hf.clicked.connect(self._browse_hash_file)
-        h_f.addWidget(btn_pick_hf)
+        self._btn_pick_hf = QPushButton(t("toolbox_btn_browse"))
+        self._btn_pick_hf.clicked.connect(self._browse_hash_file)
+        h_f.addWidget(self._btn_pick_hf)
         ch_lay.addLayout(h_f)
 
         self._txt_expected_hash = QLineEdit()
-        self._txt_expected_hash.setPlaceholderText("Code SHA-256 attendu (facultatif)...")
+        self._txt_expected_hash.setPlaceholderText(t("toolbox_hash_expected_ph"))
         ch_lay.addWidget(self._txt_expected_hash)
 
         h_act = QHBoxLayout()
-        self._btn_calc_hash = QPushButton("Vérifier le fichier")
+        self._btn_calc_hash = QPushButton(t("toolbox_hash_btn_simple"))
         self._btn_calc_hash.setObjectName("PrimaryBtn")
         self._btn_calc_hash.clicked.connect(self._run_hash_check)
         h_act.addWidget(self._btn_calc_hash)
@@ -112,9 +113,9 @@ class ToolboxWinView(QWidget):
         self._txt_sha256 = QLineEdit()
         self._txt_sha256.setReadOnly(True)
         s256_lay.addWidget(self._txt_sha256, 1)
-        btn_cp_sha = QPushButton("Copier")
-        btn_cp_sha.clicked.connect(lambda: self._copy_text(self._txt_sha256.text()))
-        s256_lay.addWidget(btn_cp_sha)
+        self._btn_cp_sha = QPushButton(t("toolbox_btn_copy"))
+        self._btn_cp_sha.clicked.connect(lambda: self._copy_text(self._txt_sha256.text()))
+        s256_lay.addWidget(self._btn_cp_sha)
         ch_lay.addWidget(self._row_sha256)
         self._row_sha256.setVisible(False)
 
@@ -197,25 +198,28 @@ class ToolboxWinView(QWidget):
         wa_lay = QHBoxLayout(self._row_wipe_adv)
         wa_lay.setContentsMargins(0, 0, 0, 0)
 
-        wa_lay.addWidget(QLabel("Table :"))
+        self._lbl_wipe_tbl = QLabel(t("toolbox_wipe_lbl_table"))
+        wa_lay.addWidget(self._lbl_wipe_tbl)
         self._cmb_wipe_scheme = QComboBox()
         self._wipe_schemes = ["gpt", "mbr"]
         self._cmb_wipe_scheme.addItems(["GPT (Moderne)", "MBR (Hérité)"])
         wa_lay.addWidget(self._cmb_wipe_scheme)
 
-        wa_lay.addWidget(QLabel("Format :"))
+        self._lbl_wipe_fsl = QLabel(t("toolbox_wipe_lbl_format"))
+        wa_lay.addWidget(self._lbl_wipe_fsl)
         self._cmb_wipe_fs = QComboBox()
         self._wipe_filesystems = ["exfat", "fat32", "ntfs"]
         self._cmb_wipe_fs.addItems(["exFAT (Universel)", "FAT32 (Classique)", "NTFS (Windows)"])
         wa_lay.addWidget(self._cmb_wipe_fs)
 
-        wa_lay.addWidget(QLabel("Nom :"))
+        self._lbl_wipe_nml = QLabel(t("toolbox_wipe_lbl_name"))
+        wa_lay.addWidget(self._lbl_wipe_nml)
         self._txt_wipe_label = QLineEdit("USB_CLEAN")
         wa_lay.addWidget(self._txt_wipe_label)
         cw_lay.addWidget(self._row_wipe_adv)
 
         h_wact = QHBoxLayout()
-        self._btn_wipe = QPushButton("Tout effacer et réparer")
+        self._btn_wipe = QPushButton(t("toolbox_wipe_btn_simple"))
         self._btn_wipe.setObjectName("DangerBtn")
         self._btn_wipe.clicked.connect(self._run_wipe)
         h_wact.addWidget(self._btn_wipe)
@@ -230,13 +234,14 @@ class ToolboxWinView(QWidget):
         cbk_lay.setContentsMargins(14, 14, 14, 14)
         cbk_lay.setSpacing(8)
 
-        lbl_bk_title = QLabel("Cloner la clé USB vers un fichier image (.img)")
-        lbl_bk_title.setObjectName("GroupTitle")
-        cbk_lay.addWidget(lbl_bk_title)
-        cbk_lay.addWidget(QLabel("Crée une copie brute secteur par secteur de la clé USB, avec option de compression gzip."))
+        self._lbl_bk_title = QLabel(t("toolbox_backup_title"))
+        self._lbl_bk_title.setObjectName("GroupTitle")
+        cbk_lay.addWidget(self._lbl_bk_title)
+        self._lbl_bk_desc = QLabel(t("toolbox_backup_desc"))
+        cbk_lay.addWidget(self._lbl_bk_desc)
 
         h_bk = QHBoxLayout()
-        self._btn_backup = QPushButton("Sauvegarder l'image (.img)...")
+        self._btn_backup = QPushButton(t("toolbox_backup_btn"))
         self._btn_backup.clicked.connect(self._run_backup)
         h_bk.addWidget(self._btn_backup)
         h_bk.addStretch()
@@ -250,13 +255,14 @@ class ToolboxWinView(QWidget):
         cq_lay.setContentsMargins(14, 14, 14, 14)
         cq_lay.setSpacing(8)
 
-        lbl_q_title = QLabel("Tester le démarrage sans redémarrer (QEMU)")
-        lbl_q_title.setObjectName("GroupTitle")
-        cq_lay.addWidget(lbl_q_title)
-        cq_lay.addWidget(QLabel("Ouvre une machine virtuelle en lecture seule (-snapshot) pour vérifier le menu de démarrage."))
+        self._lbl_q_title = QLabel(t("toolbox_qemu_title"))
+        self._lbl_q_title.setObjectName("GroupTitle")
+        cq_lay.addWidget(self._lbl_q_title)
+        self._lbl_q_desc = QLabel(t("toolbox_qemu_desc"))
+        cq_lay.addWidget(self._lbl_q_desc)
 
         h_q = QHBoxLayout()
-        self._btn_qemu = QPushButton("Lancer le test virtuel QEMU")
+        self._btn_qemu = QPushButton(t("toolbox_qemu_btn"))
         self._btn_qemu.clicked.connect(self._run_qemu)
         h_q.addWidget(self._btn_qemu)
         h_q.addStretch()
@@ -267,30 +273,53 @@ class ToolboxWinView(QWidget):
         scroll.setWidget(self._scroll_widget)
         main_layout.addWidget(scroll)
 
+    def apply_language(self) -> None:
+        """Refresh all visible labels and buttons to match current language."""
+        self._txt_hash_file.setPlaceholderText(t("toolbox_hash_file_ph"))
+        self._txt_expected_hash.setPlaceholderText(t("toolbox_hash_expected_ph"))
+        self._btn_pick_hf.setText(t("toolbox_btn_browse"))
+        self._btn_cp_sha.setText(t("toolbox_btn_copy"))
+        self._chk_destructive_bb.setText(t("toolbox_bb_destructive_chk"))
+        self._lbl_wipe_tbl.setText(t("toolbox_wipe_lbl_table"))
+        self._lbl_wipe_fsl.setText(t("toolbox_wipe_lbl_format"))
+        self._lbl_wipe_nml.setText(t("toolbox_wipe_lbl_name"))
+        self._lbl_bk_title.setText(t("toolbox_backup_title"))
+        self._lbl_bk_desc.setText(t("toolbox_backup_desc"))
+        self._btn_backup.setText(t("toolbox_backup_btn"))
+        self._lbl_q_title.setText(t("toolbox_qemu_title"))
+        self._lbl_q_desc.setText(t("toolbox_qemu_desc"))
+        self._btn_qemu.setText(t("toolbox_qemu_btn"))
+
+        if self._simple_mode:
+            self._lbl_hash_title.setText(t("toolbox_hash_title_simple"))
+            self._lbl_hash_desc.setText(t("toolbox_hash_desc_simple"))
+            self._btn_calc_hash.setText(t("toolbox_hash_btn_simple"))
+            self._lbl_bench_title.setText(t("toolbox_bench_title_simple"))
+            self._lbl_bench_desc.setText(t("toolbox_bench_desc_simple"))
+            self._btn_bench.setText(t("toolbox_bench_btn_simple"))
+            self._lbl_bb_title.setText(t("toolbox_bb_title_simple"))
+            self._lbl_bb_desc.setText(t("toolbox_bb_desc_simple"))
+            self._btn_badblocks.setText(t("toolbox_bb_btn_simple"))
+            self._lbl_wipe_title.setText(t("toolbox_wipe_title_simple"))
+            self._lbl_wipe_desc.setText(t("toolbox_wipe_desc_simple"))
+            self._btn_wipe.setText(t("toolbox_wipe_btn_simple"))
+        else:
+            self._lbl_hash_title.setText(t("toolbox_hash_title_adv"))
+            self._lbl_hash_desc.setText(t("toolbox_hash_desc_adv"))
+            self._btn_calc_hash.setText(t("toolbox_hash_btn_adv"))
+            self._lbl_bench_title.setText(t("toolbox_bench_title_adv"))
+            self._lbl_bench_desc.setText(t("toolbox_bench_desc_adv"))
+            self._btn_bench.setText(t("toolbox_bench_btn_adv"))
+            self._lbl_bb_title.setText(t("toolbox_bb_title_adv"))
+            self._lbl_bb_desc.setText(t("toolbox_bb_desc_adv"))
+            self._btn_badblocks.setText(t("toolbox_bb_btn_adv"))
+            self._lbl_wipe_title.setText(t("toolbox_wipe_title_adv"))
+            self._lbl_wipe_desc.setText(t("toolbox_wipe_desc_adv"))
+            self._btn_wipe.setText(t("toolbox_wipe_btn_adv"))
+
     def set_simple_mode(self, simple: bool) -> None:
         self._simple_mode = simple
-        if simple:
-            self._lbl_hash_title.setText("Vérifier qu'un fichier téléchargé n'est pas abîmé")
-            self._lbl_hash_desc.setText("Optionnel : compare votre fichier ISO avec le code officiel fourni sur le site.")
-            self._btn_calc_hash.setText("Vérifier le fichier")
-            self._lbl_bench_title.setText("Vitesse de la clé USB")
-            self._lbl_bench_desc.setText("Mesure la rapidité de lecture de votre clé sur ce port USB.")
-            self._lbl_bb_title.setText("Vérifier l'état de la clé USB")
-            self._lbl_bb_desc.setText("Recherche les erreurs matérielles sans rien effacer.")
-            self._lbl_wipe_title.setText("Réparer une clé USB (tout effacer)")
-            self._lbl_wipe_desc.setText("Si votre clé affiche une capacité réduite ou est illisible, ce nettoyage restaure toute sa taille normale.")
-            self._btn_wipe.setText("Tout effacer et réparer")
-        else:
-            self._lbl_hash_title.setText("Vérificateur d'empreintes numériques (SHA-256 / SHA-1 / MD5)")
-            self._lbl_hash_desc.setText("Calcul en flux continu et comparaison en temps constant.")
-            self._btn_calc_hash.setText("Calculer et vérifier")
-            self._lbl_bench_title.setText("Diagnostic de débit séquentiel (256 Mo)")
-            self._lbl_bench_desc.setText("Évalue la vitesse de lecture brute sur le contrôleur USB.")
-            self._lbl_bb_title.setText("Contrôle de surface (secteurs défectueux)")
-            self._lbl_bb_desc.setText("Analyse des blocs physiques et détection de fausses clés.")
-            self._lbl_wipe_title.setText("Remise à zéro d'usine (Clean & Partition)")
-            self._lbl_wipe_desc.setText("Supprime toutes les signatures et recrée une table propre.")
-            self._btn_wipe.setText("Effacer et restaurer d'usine")
+        self.apply_language()
 
         self._chk_destructive_bb.setVisible(not simple)
         self._row_wipe_adv.setVisible(not simple)

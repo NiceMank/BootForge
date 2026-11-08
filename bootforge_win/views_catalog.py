@@ -21,7 +21,8 @@ from PyQt6.QtWidgets import (
 )
 
 from bootforge_win.backend import WinTaskController
-from engine.catalog import OFFICIAL_CATALOG, default_downloads_dir
+from engine.catalog import OFFICIAL_CATALOG, default_downloads_dir, get_localized_catalog
+from engine.i18n import get_current_language, t
 
 
 class CatalogWinView(QWidget):
@@ -45,7 +46,7 @@ class CatalogWinView(QWidget):
 
         self._simple_mode = True
         self._dest_dir = str(default_downloads_dir())
-        self._active_category = "Tous"
+        self._active_category_idx = 0
         self._downloaded_paths: Dict[str, str] = {}
         self._dl_buttons: List[QPushButton] = []
 
@@ -69,13 +70,13 @@ class CatalogWinView(QWidget):
 
         top_bar.addStretch()
 
-        self._lbl_dest = QLabel(f"Dossier : {self._dest_dir}")
+        self._lbl_dest = QLabel(t("catalog_folder_lbl", path=self._dest_dir))
         self._lbl_dest.setObjectName("Muted")
         top_bar.addWidget(self._lbl_dest)
 
-        btn_pick_folder = QPushButton("Dossier...")
-        btn_pick_folder.clicked.connect(self._browse_dest_folder)
-        top_bar.addWidget(btn_pick_folder)
+        self._btn_pick_folder = QPushButton(t("catalog_folder_btn"))
+        self._btn_pick_folder.clicked.connect(self._browse_dest_folder)
+        top_bar.addWidget(self._btn_pick_folder)
         main_layout.addLayout(top_bar)
 
         # Scroll items
@@ -89,11 +90,33 @@ class CatalogWinView(QWidget):
         scroll.setWidget(self._scroll_widget)
         main_layout.addWidget(scroll, 1)
 
-    def set_simple_mode(self, simple: bool) -> None:
-        self._simple_mode = simple
-        self._active_category = "Tous" if simple else "Toutes"
+    def apply_language(self) -> None:
+        """Refresh localized text and catalog strings."""
+        self._lbl_dest.setText(t("catalog_folder_lbl", path=self._dest_dir))
+        self._btn_pick_folder.setText(t("catalog_folder_btn"))
         self._rebuild_category_buttons()
         self._rebuild_rows()
+
+    def set_simple_mode(self, simple: bool) -> None:
+        self._simple_mode = simple
+        self._active_category_idx = 0
+        self._rebuild_category_buttons()
+        self._rebuild_rows()
+
+    def _get_category_labels(self) -> List[str]:
+        if self._simple_mode:
+            return [
+                t("catalog_cat_all_simple"),
+                t("catalog_cat_current_simple"),
+                t("catalog_cat_rescue_simple"),
+                t("catalog_cat_security_simple"),
+            ]
+        return [
+            t("catalog_cat_all_adv"),
+            t("catalog_cat_desktop_adv"),
+            t("catalog_cat_security_adv"),
+            t("catalog_cat_rescue_adv"),
+        ]
 
     def _rebuild_category_buttons(self) -> None:
         # Clear existing buttons
@@ -104,30 +127,26 @@ class CatalogWinView(QWidget):
                 w.setParent(None)
                 w.deleteLater()
 
-        cats = (
-            ["Tous", "Systèmes courants", "Dépannage", "Sécurité"]
-            if self._simple_mode
-            else ["Toutes", "Linux Desktop", "Sécurité & Pentest", "Secours & Disque"]
-        )
+        cats = self._get_category_labels()
         for idx, c in enumerate(cats):
             btn = QPushButton(c)
             btn.setCheckable(True)
             self._cat_btn_group.addButton(btn)
-            if idx == 0:
+            if idx == self._active_category_idx:
                 btn.setChecked(True)
-            btn.toggled.connect(lambda checked, cat=c: self._on_cat_toggled(checked, cat))
+            btn.toggled.connect(lambda checked, i=idx: self._on_cat_toggled(checked, i))
             self._cat_layout.addWidget(btn)
 
-    def _on_cat_toggled(self, checked: bool, category: str) -> None:
+    def _on_cat_toggled(self, checked: bool, index: int) -> None:
         if checked:
-            self._active_category = category
+            self._active_category_idx = index
             self._rebuild_rows()
 
     def _browse_dest_folder(self) -> None:
-        d = QFileDialog.getExistingDirectory(self, "Choisir le dossier de téléchargement", self._dest_dir)
+        d = QFileDialog.getExistingDirectory(self, t("catalog_dest_folder"), self._dest_dir)
         if d:
             self._dest_dir = d
-            self._lbl_dest.setText(f"Dossier : {d}")
+            self._lbl_dest.setText(t("catalog_folder_lbl", path=d))
 
     def _rebuild_rows(self) -> None:
         # Clear items
@@ -139,13 +158,16 @@ class CatalogWinView(QWidget):
                 w.deleteLater()
         self._dl_buttons.clear()
 
-        all_key = "Tous" if self._simple_mode else "Toutes"
+        cur_lang = get_current_language()
+        all_catalog = get_localized_catalog(cur_lang)
+        cat_labels = self._get_category_labels()
+        target_cat = cat_labels[self._active_category_idx] if self._active_category_idx < len(cat_labels) else cat_labels[0]
         cat_key = "simple_category" if self._simple_mode else "category"
 
         items = [
             it
-            for it in OFFICIAL_CATALOG
-            if self._active_category == all_key or it.get(cat_key) == self._active_category
+            for it in all_catalog
+            if self._active_category_idx == 0 or it.get(cat_key) == target_cat
         ]
 
         for item in items:
@@ -173,7 +195,7 @@ class CatalogWinView(QWidget):
 
             h_bot = QHBoxLayout()
             if not self._simple_mode:
-                btn_cs = QPushButton("Somme SHA-256")
+                btn_cs = QPushButton(t("catalog_btn_checksum"))
                 btn_cs.clicked.connect(lambda _, u=item["checksum_page"]: webbrowser.open(u))
                 h_bot.addWidget(btn_cs)
 
@@ -181,16 +203,16 @@ class CatalogWinView(QWidget):
 
             saved_path = self._downloaded_paths.get(item["id"])
             if saved_path and os.path.isfile(saved_path):
-                btn_use = QPushButton("Mettre sur une clé" if self._simple_mode else "Flash direct")
+                btn_use = QPushButton(t("catalog_btn_use_simple") if self._simple_mode else t("catalog_btn_use_adv"))
                 btn_use.clicked.connect(lambda _, p=saved_path: self._on_use_in_direct(p))
                 h_bot.addWidget(btn_use)
 
-                btn_vtoy = QPushButton("+ Multi-systèmes" if self._simple_mode else "+ Ventoy")
+                btn_vtoy = QPushButton(t("catalog_btn_ventoy_simple") if self._simple_mode else t("catalog_btn_ventoy_adv"))
                 btn_vtoy.setObjectName("PrimaryBtn")
                 btn_vtoy.clicked.connect(lambda _, p=saved_path: self._on_use_in_ventoy(p))
                 h_bot.addWidget(btn_vtoy)
             else:
-                btn_dl = QPushButton("Télécharger" if self._simple_mode else "Télécharger ISO")
+                btn_dl = QPushButton(t("catalog_btn_dl_simple") if self._simple_mode else t("catalog_btn_dl_adv"))
                 btn_dl.setObjectName("PrimaryBtn")
                 btn_dl.setEnabled(not self._ctrl.is_busy())
                 btn_dl.clicked.connect(lambda _, it=item: self._start_download(it))

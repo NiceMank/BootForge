@@ -16,6 +16,7 @@ gi.require_version("PangoCairo", "1.0")
 
 from gi.repository import Adw, Gdk, Gtk, Pango, PangoCairo
 
+from engine.i18n import get_current_language, t
 from engine.unattend_builder import build_autounattend_xml
 from bootforge_ui.theme import esc, format_bytes, make_icon_button
 
@@ -491,14 +492,14 @@ class PreflightDialog(Adw.Dialog):
 
     def __init__(self, deps: Optional[Dict[str, Any]], on_refresh: Callable[[], None]) -> None:
         super().__init__()
-        self.set_title("Outils système")
+        self.set_title(t("dialog_preflight_win_title"))
         self.set_content_width(620)
         self.set_content_height(560)
         self._on_refresh = on_refresh
 
         toolbar = Adw.ToolbarView()
         hdr = Adw.HeaderBar()
-        refresh_btn = make_icon_button("Actualiser", "view-refresh-symbolic")
+        refresh_btn = make_icon_button(t("bar_refresh"), "view-refresh-symbolic")
         refresh_btn.connect("clicked", lambda *_: (self._on_refresh(), self.close()))
         hdr.pack_end(refresh_btn)
         toolbar.add_top_bar(hdr)
@@ -509,15 +510,16 @@ class PreflightDialog(Adw.Dialog):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
 
         if not deps:
-            box.append(Gtk.Label(label="Vérification en cours..."))
+            box.append(Gtk.Label(label="..."))
         else:
             grp_core = Adw.PreferencesGroup(
-                title=esc("Outils indispensables"),
-                description=esc("Présents sur votre système Linux pour créer et formater des clés USB."),
+                title=esc(t("dialog_preflight_core")),
+                description=esc("Présents sur votre système Linux pour créer et formater des clés USB." if get_current_language() == "fr" else "Installed on your Linux system to create and format bootable USB drives."),
             )
             for item in deps.get("core", []):
                 row = Adw.ActionRow(use_markup=False, title=item["name"], subtitle=item["purpose"])
-                badge = Gtk.Label(label="OK" if item["installed"] else "Manquant")
+                status_txt = "OK" if item["installed"] else ("Manquant" if get_current_language() == "fr" else "Missing")
+                badge = Gtk.Label(label=status_txt)
                 badge.add_css_class("bf-status-pill")
                 badge.add_css_class("bf-pill-ok" if item["installed"] else "bf-pill-err")
                 badge.set_valign(Gtk.Align.CENTER)
@@ -525,14 +527,15 @@ class PreflightDialog(Adw.Dialog):
                 grp_core.add(row)
             box.append(grp_core)
 
-            grp_assets = Adw.PreferencesGroup(title=esc("Composants embarqués"))
+            grp_assets = Adw.PreferencesGroup(title=esc(t("dialog_preflight_win_embedded")))
             uefi_ok = bool(deps.get("uefi_ntfs_cached"))
             r_uefi = Adw.ActionRow(
                 use_markup=False,
-                title="Chargeur UEFI:NTFS",
+                title="Chargeur UEFI:NTFS" if get_current_language() == "fr" else "UEFI:NTFS Bootloader",
                 subtitle=str(deps.get("uefi_ntfs_path") or ""),
             )
-            b_uefi = Gtk.Label(label="Prêt" if uefi_ok else "Téléchargement auto")
+            b_txt = ("Prêt" if get_current_language() == "fr" else "Ready") if uefi_ok else ("Téléchargement auto" if get_current_language() == "fr" else "Auto-download")
+            b_uefi = Gtk.Label(label=b_txt)
             b_uefi.add_css_class("bf-status-pill")
             b_uefi.add_css_class("bf-pill-ok" if uefi_ok else "bf-pill-warn")
             b_uefi.set_valign(Gtk.Align.CENTER)
@@ -541,15 +544,16 @@ class PreflightDialog(Adw.Dialog):
             box.append(grp_assets)
 
             grp_opt = Adw.PreferencesGroup(
-                title=esc("Outils facultatifs"),
-                description=esc("Utiles pour la découpe FAT32 ou le test de démarrage virtuel."),
+                title=esc(t("dialog_preflight_opt")),
+                description=esc("Utiles pour la découpe FAT32 ou le test de démarrage virtuel." if get_current_language() == "fr" else "Useful for FAT32 splitting or virtual machine boot testing."),
             )
             for item in deps.get("optional", []):
                 sub = item["purpose"]
                 if not item["installed"] and item.get("install_cmd"):
                     sub = f"{sub} ({item['install_cmd']})"
                 row = Adw.ActionRow(use_markup=False, title=item["name"], subtitle=sub)
-                badge = Gtk.Label(label="Installé" if item["installed"] else "Optionnel")
+                opt_txt = ("Installé" if get_current_language() == "fr" else "Installed") if item["installed"] else ("Optionnel" if get_current_language() == "fr" else "Optional")
+                badge = Gtk.Label(label=opt_txt)
                 badge.add_css_class("bf-status-pill")
                 badge.add_css_class("bf-pill-ok" if item["installed"] else "bf-pill-neutral")
                 badge.set_valign(Gtk.Align.CENTER)
@@ -573,7 +577,7 @@ def present_confirm_destroy_dialog(
 ) -> None:
     """Confirm before erasing a USB drive."""
     dialog = Adw.Dialog()
-    dialog.set_title("Confirmer l’effacement" if simple_mode else "Confirmation requise")
+    dialog.set_title(t("dialog_confirm_title_simple") if simple_mode else t("dialog_confirm_title_adv"))
     dialog.set_content_width(450)
 
     toolbar = Adw.ToolbarView()
@@ -593,9 +597,9 @@ def present_confirm_destroy_dialog(
     banner_box.append(warn_icon)
 
     intro = (
-        f"Tout ce qui se trouve actuellement sur cette clé USB sera effacé.\n{detail_text}"
+        t("dialog_confirm_intro_simple", detail=detail_text)
         if simple_mode
-        else f"Toutes les données sur ce périphérique vont être effacées.\n{detail_text}"
+        else t("dialog_confirm_intro_adv", detail=detail_text)
     )
     msg = Gtk.Label(label=intro, xalign=0, wrap=True)
     banner_box.append(msg)
@@ -603,15 +607,17 @@ def present_confirm_destroy_dialog(
 
     grp = Adw.PreferencesGroup()
     dev_sub = (
-        f"{device.get('model', '')} ({format_bytes(device.get('size_bytes', 0))})"
+        f"{device.get('model', 'USB')} ({format_bytes(device.get('size_bytes', 0))})"
         if simple_mode
-        else f"{device.get('model', '')} ({device.get('path', '')}) · {format_bytes(device.get('size_bytes', 0))}"
+        else f"{device.get('model', 'Disk')} ({device.get('path', '')}) · {format_bytes(device.get('size_bytes', 0))}"
     )
-    grp.add(Adw.ActionRow(use_markup=False, title="Action", subtitle=operation_label))
-    grp.add(Adw.ActionRow(use_markup=False, title="Clé USB", subtitle=dev_sub))
+    grp.add(Adw.ActionRow(use_markup=False, title=t("dialog_confirm_action_lbl", action="").replace(" : <b></b>", "").replace("<b>", "").replace("</b>", ""), subtitle=operation_label))
+    grp.add(Adw.ActionRow(use_markup=False, title=t("app_device_label").rstrip(" :"), subtitle=dev_sub))
     content.append(grp)
 
-    entry = Adw.EntryRow(title="Tapez EFFACER pour confirmer")
+    confirm_word = t("dialog_confirm_word")
+    prompt_txt = t("dialog_confirm_prompt_msg", word=confirm_word).replace("<b>", "").replace("</b>", "")
+    entry = Adw.EntryRow(title=prompt_txt)
     entry_grp = Adw.PreferencesGroup()
     entry_grp.add(entry)
     content.append(entry_grp)
@@ -619,17 +625,17 @@ def present_confirm_destroy_dialog(
     btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
     btn_row.set_halign(Gtk.Align.END)
 
-    cancel_btn = Gtk.Button(label="Annuler")
+    cancel_btn = Gtk.Button(label=t("dialog_confirm_btn_cancel"))
     cancel_btn.connect("clicked", lambda *_: dialog.close())
 
-    confirm_btn = Gtk.Button(label="Effacer et démarrer")
+    confirm_btn = Gtk.Button(label=t("dialog_confirm_btn_exec"))
     confirm_btn.add_css_class("destructive-action")
     confirm_btn.set_sensitive(False)
 
-    entry.connect("changed", lambda e: confirm_btn.set_sensitive(e.get_text().strip().upper() == "EFFACER"))
+    entry.connect("changed", lambda e: confirm_btn.set_sensitive(e.get_text().strip().upper() in ("EFFACER", "ERASE")))
 
     def _accept(*_args: Any) -> None:
-        if entry.get_text().strip().upper() == "EFFACER":
+        if entry.get_text().strip().upper() in ("EFFACER", "ERASE"):
             dialog.close()
             on_confirmed()
 

@@ -18,6 +18,12 @@ gi.require_version("Gio", "2.0")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
 from engine.disk_utils import check_system_dependencies, list_block_devices
+from engine.i18n import (
+    get_current_language,
+    set_current_language,
+    subscribe_language_changed,
+    t,
+)
 from bootforge_ui import __app_id__, __version__
 from bootforge_ui.backend import ActiveProcessController, PROJECT_ROOT, run_async
 from bootforge_ui.theme import format_bytes, format_speed, install_css, load_prefs, make_icon_button, save_prefs
@@ -80,38 +86,45 @@ class BootForgeWindow(Adw.ApplicationWindow):
         header.set_title_widget(self._switcher)
 
         # Primary GNOME app menu
-        menu = Gio.Menu()
-        menu.append("Changer thème Clair / Sombre", "win.toggle-theme")
-        menu.append("Outils système installés...", "win.preflight")
-        menu.append("Afficher / masquer le journal", "win.toggle-logs")
-        menu.append("À propos de BootForge", "win.about")
+        self._app_menu = Gio.Menu()
+        self._app_menu.append(t("menu_theme"), "win.toggle-theme")
+        self._app_menu.append(t("menu_preflight"), "win.preflight")
+        self._app_menu.append(t("menu_logs"), "win.toggle-logs")
+        self._app_menu.append(t("menu_lang"), "win.toggle-lang")
+        self._app_menu.append(t("menu_about"), "win.about")
 
         menu_btn = Gtk.MenuButton(
             icon_name="open-menu-symbolic",
             tooltip_text="Menu",
-            menu_model=menu,
+            menu_model=self._app_menu,
         )
+
+        cur_lang = get_current_language()
+        self._btn_lang = Gtk.Button(label="FR 🇫🇷" if cur_lang == "fr" else "EN 🇬🇧")
+        self._btn_lang.set_tooltip_text(t("app_lang_tip"))
+        self._btn_lang.connect("clicked", lambda *_: self._toggle_language())
 
         self._btn_console = Gtk.ToggleButton(
             icon_name="utilities-terminal-symbolic",
-            tooltip_text="Afficher ou masquer le journal système",
+            tooltip_text=t("app_console_tip"),
         )
         self._btn_console.connect("toggled", self._on_console_toggled)
 
         # Linked Simple / Avancé mode selector
         mode_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         mode_box.add_css_class("linked")
-        self._btn_simple = Gtk.ToggleButton(label="Simple")
-        self._btn_simple.set_tooltip_text("Interface guidée sans réglages techniques")
-        self._btn_advanced = Gtk.ToggleButton(label="Avancé")
+        self._btn_simple = Gtk.ToggleButton(label=t("mode_simple"))
+        self._btn_simple.set_tooltip_text(t("mode_simple_tip"))
+        self._btn_advanced = Gtk.ToggleButton(label=t("mode_advanced"))
         self._btn_advanced.set_group(self._btn_simple)
-        self._btn_advanced.set_tooltip_text("Affiche toutes les options Rufus, Ventoy, partitions et console")
+        self._btn_advanced.set_tooltip_text(t("mode_advanced_tip"))
 
         self._btn_simple.connect("toggled", self._on_mode_toggled)
         mode_box.append(self._btn_simple)
         mode_box.append(self._btn_advanced)
 
         header.pack_end(menu_btn)
+        header.pack_end(self._btn_lang)
         header.pack_end(self._btn_console)
         header.pack_end(mode_box)
         toolbar_view.add_top_bar(header)
@@ -220,21 +233,21 @@ class BootForgeWindow(Adw.ApplicationWindow):
         term_bar.set_margin_bottom(6)
         term_bar.set_margin_start(14)
         term_bar.set_margin_end(14)
-        tlbl = Gtk.Label(label="Journal des opérations")
-        tlbl.add_css_class("caption")
-        tlbl.add_css_class("bf-mono")
-        tlbl.set_hexpand(True)
-        tlbl.set_xalign(0)
-        term_bar.append(tlbl)
+        self._tlbl = Gtk.Label(label=t("bar_journal_title"))
+        self._tlbl.add_css_class("caption")
+        self._tlbl.add_css_class("bf-mono")
+        self._tlbl.set_hexpand(True)
+        self._tlbl.set_xalign(0)
+        term_bar.append(self._tlbl)
 
-        btn_copy_log = Gtk.Button(label="Copier")
-        btn_copy_log.add_css_class("flat")
-        btn_copy_log.connect("clicked", self._copy_logs)
-        btn_clr_log = Gtk.Button(label="Effacer")
-        btn_clr_log.add_css_class("flat")
-        btn_clr_log.connect("clicked", self._clear_logs)
-        term_bar.append(btn_copy_log)
-        term_bar.append(btn_clr_log)
+        self._btn_copy_log = Gtk.Button(label=t("bar_journal_copy"))
+        self._btn_copy_log.add_css_class("flat")
+        self._btn_copy_log.connect("clicked", self._copy_logs)
+        self._btn_clr_log = Gtk.Button(label=t("bar_journal_clear"))
+        self._btn_clr_log.add_css_class("flat")
+        self._btn_clr_log.connect("clicked", self._clear_logs)
+        term_bar.append(self._btn_copy_log)
+        term_bar.append(self._btn_clr_log)
         term_wrap.append(term_bar)
 
         term_scroll = Gtk.ScrolledWindow()
@@ -257,13 +270,13 @@ class BootForgeWindow(Adw.ApplicationWindow):
         status_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         status_bar.add_css_class("bf-statusbar")
 
-        self._status_badge = Gtk.Label(label="PRÊT")
+        self._status_badge = Gtk.Label(label=t("status_badge_ready"))
         self._status_badge.add_css_class("bf-status-pill")
         self._status_badge.add_css_class("bf-pill-ok")
         self._status_badge.add_css_class("bf-mono")
         status_bar.append(self._status_badge)
 
-        self._status_msg = Gtk.Label(label="Prêt", xalign=0)
+        self._status_msg = Gtk.Label(label=t("status_ready"), xalign=0)
         self._status_msg.set_ellipsize(Pango.EllipsizeMode.END)
         self._status_msg.set_hexpand(True)
         status_bar.append(self._status_msg)
@@ -286,12 +299,12 @@ class BootForgeWindow(Adw.ApplicationWindow):
         self._pct_lbl.add_css_class("bf-mono")
         status_bar.append(self._pct_lbl)
 
-        self._btn_cancel = make_icon_button("Annuler", "process-stop-symbolic", ("destructive-action",))
+        self._btn_cancel = make_icon_button(t("bar_btn_cancel"), "process-stop-symbolic", ("destructive-action",))
         self._btn_cancel.set_visible(False)
         self._btn_cancel.connect("clicked", self._cancel_active)
         status_bar.append(self._btn_cancel)
 
-        self._btn_log_count = Gtk.Button(label="Journal (0)")
+        self._btn_log_count = Gtk.Button(label=t("bar_journal_btn", count=0))
         self._btn_log_count.add_css_class("flat")
         self._btn_log_count.add_css_class("bf-mono")
         self._btn_log_count.connect("clicked", lambda *_: self._btn_console.set_active(not self._btn_console.get_active()))
@@ -301,6 +314,9 @@ class BootForgeWindow(Adw.ApplicationWindow):
 
         toolbar_view.set_content(main_vbox)
         self.set_content(toolbar_view)
+
+        # Language listener
+        subscribe_language_changed(self._on_language_changed)
 
         # Apply saved or default mode
         self.set_simple_mode(self._simple_mode, persist=False)
@@ -324,9 +340,55 @@ class BootForgeWindow(Adw.ApplicationWindow):
         act_logs.connect("activate", lambda *_: self._btn_console.set_active(not self._btn_console.get_active()))
         self.add_action(act_logs)
 
+        act_lang = Gio.SimpleAction.new("toggle-lang", None)
+        act_lang.connect("activate", lambda *_: self._toggle_language())
+        self.add_action(act_lang)
+
         act_about = Gio.SimpleAction.new("about", None)
         act_about.connect("activate", self._open_about)
         self.add_action(act_about)
+
+    def _on_language_changed(self, lang: str) -> None:
+        GLib.idle_add(self.apply_language)
+
+    def _toggle_language(self) -> None:
+        new_lang = "en" if get_current_language() == "fr" else "fr"
+        set_current_language(new_lang, persist=True)
+        self.apply_language()
+
+    def apply_language(self) -> None:
+        lang = get_current_language()
+        self._btn_lang.set_label("FR 🇫🇷" if lang == "fr" else "EN 🇬🇧")
+        self._btn_lang.set_tooltip_text(t("app_lang_tip"))
+        self._btn_console.set_tooltip_text(t("app_console_tip"))
+        self._btn_refresh_dev.set_tooltip_text(t("app_refresh"))
+        self._btn_cancel.set_tooltip_text(t("bar_btn_cancel"))
+        self._tlbl.set_label(t("bar_journal_title"))
+        self._btn_copy_log.set_label(t("bar_journal_copy"))
+        self._btn_clr_log.set_label(t("bar_journal_clear"))
+        self._btn_log_count.set_label(t("bar_journal_btn", count=self._log_count))
+        if not self._proc.is_busy():
+            self._status_badge.set_label(t("status_badge_ready"))
+            self._status_msg.set_label(t("status_ready"))
+
+        # Re-populate app menu with updated labels
+        self._app_menu.remove_all()
+        self._app_menu.append(t("menu_theme"), "win.toggle-theme")
+        self._app_menu.append(t("menu_preflight"), "win.preflight")
+        self._app_menu.append(t("menu_logs"), "win.toggle-logs")
+        self._app_menu.append(t("menu_lang"), "win.toggle-lang")
+        self._app_menu.append(t("menu_about"), "win.about")
+
+        if hasattr(self._view_direct, "apply_language"):
+            self._view_direct.apply_language()
+        if hasattr(self._view_ventoy, "apply_language"):
+            self._view_ventoy.apply_language()
+        if hasattr(self._view_toolbox, "apply_language"):
+            self._view_toolbox.apply_language()
+        if hasattr(self._view_catalog, "apply_language"):
+            self._view_catalog.apply_language()
+
+        self.set_simple_mode(self._simple_mode, persist=False)
 
     def _on_mode_toggled(self, *_args: Any) -> None:
         if self._mode_updating:
@@ -346,12 +408,12 @@ class BootForgeWindow(Adw.ApplicationWindow):
             save_prefs({"mode": "simple" if simple else "advanced"})
 
         if simple:
-            self._page_direct.set_title("Créer une clé")
-            self._page_ventoy.set_title("Multi-OS")
-            self._page_toolbox.set_title("Réparer")
-            self._page_catalog.set_title("Télécharger")
+            self._page_direct.set_title(t("nav_direct_simple"))
+            self._page_ventoy.set_title(t("nav_ventoy_simple"))
+            self._page_toolbox.set_title(t("nav_toolbox_simple"))
+            self._page_catalog.set_title(t("nav_catalog_simple"))
 
-            self._usb_lbl.set_label("Clé USB :")
+            self._usb_lbl.set_label(t("app_device_label"))
             self._chk_locked.set_visible(False)
             if self._show_locked:
                 self._show_locked = False
@@ -362,15 +424,15 @@ class BootForgeWindow(Adw.ApplicationWindow):
             self._btn_log_count.set_visible(False)
             self._progress_bar.set_visible(self._proc.is_busy())
             self._pct_lbl.set_visible(self._proc.is_busy())
-            if not self._proc.is_busy() and self._status_msg.get_label() == "En attente d’instructions":
-                self._status_msg.set_label("Prêt")
+            if not self._proc.is_busy() and self._status_msg.get_label() in ("En attente d’instructions", "Waiting for instructions"):
+                self._status_msg.set_label(t("status_ready"))
         else:
-            self._page_direct.set_title("Flash direct")
-            self._page_ventoy.set_title("Multi-Boot")
-            self._page_toolbox.set_title("Outils USB")
-            self._page_catalog.set_title("Catalogue ISO")
+            self._page_direct.set_title(t("nav_direct_adv"))
+            self._page_ventoy.set_title(t("nav_ventoy_adv"))
+            self._page_toolbox.set_title(t("nav_toolbox_adv"))
+            self._page_catalog.set_title(t("nav_catalog_adv"))
 
-            self._usb_lbl.set_label("Périphérique cible :")
+            self._usb_lbl.set_label(t("app_device_target"))
             self._chk_locked.set_visible(True)
 
             self._btn_console.set_visible(True)
@@ -378,6 +440,12 @@ class BootForgeWindow(Adw.ApplicationWindow):
             self._btn_log_count.set_visible(True)
             self._progress_bar.set_visible(True)
             self._pct_lbl.set_visible(True)
+
+        self._btn_simple.set_label(t("mode_simple"))
+        self._btn_simple.set_tooltip_text(t("mode_simple_tip"))
+        self._btn_advanced.set_label(t("mode_advanced"))
+        self._btn_advanced.set_tooltip_text(t("mode_advanced_tip"))
+        self._chk_locked.set_tooltip_text(t("app_locked_tip"))
 
         self._view_direct.set_simple_mode(simple)
         self._view_ventoy.set_simple_mode(simple)
@@ -406,8 +474,9 @@ class BootForgeWindow(Adw.ApplicationWindow):
             license_type=Gtk.License.GPL_3_0,
             website="https://github.com/NiceMank/BootForge",
             issue_url="https://github.com/NiceMank/BootForge/issues",
-            comments="Création de clés USB démarrables Windows et Linux (mode simple ou multi-systèmes).",
+            comments=t("dialog_about_desc"),
         )
+        dlg.present(self)
         dlg.present(self)
 
     def refresh_devices(self) -> None:

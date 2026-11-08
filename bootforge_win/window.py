@@ -41,6 +41,13 @@ from bootforge_win.views_direct import DirectFlashWinView
 from bootforge_win.views_toolbox import ToolboxWinView
 from bootforge_win.views_ventoy import MultiBootWinView
 from engine.disk_utils import check_system_dependencies, list_block_devices
+from engine.i18n import (
+    get_current_language,
+    init_language,
+    set_current_language,
+    subscribe_language_changed,
+    t,
+)
 
 
 class BootForgeMainWindow(QMainWindow):
@@ -179,17 +186,22 @@ class BootForgeMainWindow(QMainWindow):
         th_lay.addWidget(self._btn_toggle_console)
 
         self._btn_theme = QPushButton("🌙" if self._dark_theme else "☀️")
-        self._btn_theme.setToolTip("Basculer thème Sombre / Clair")
+        self._btn_theme.setToolTip(t("app_theme_tip"))
         self._btn_theme.clicked.connect(self._toggle_theme)
         th_lay.addWidget(self._btn_theme)
 
+        self._btn_lang = QPushButton("FR 🇫🇷" if get_current_language() == "fr" else "EN 🇬🇧")
+        self._btn_lang.setToolTip(t("app_lang_tip"))
+        self._btn_lang.clicked.connect(self._toggle_language)
+        th_lay.addWidget(self._btn_lang)
+
         btn_tools = QPushButton("⚙️")
-        btn_tools.setToolTip("Outils système Windows installés")
+        btn_tools.setToolTip(t("app_tools_tip"))
         btn_tools.clicked.connect(self._open_preflight)
         th_lay.addWidget(btn_tools)
 
         btn_about = QPushButton("ℹ️")
-        btn_about.setToolTip("À propos de BootForge")
+        btn_about.setToolTip(t("app_about_tip"))
         btn_about.clicked.connect(self._open_about)
         th_lay.addWidget(btn_about)
 
@@ -205,7 +217,7 @@ class BootForgeMainWindow(QMainWindow):
         lbl_usb_ic = QLabel("🔌")
         db_lay.addWidget(lbl_usb_ic)
 
-        self._lbl_usb = QLabel("Clé USB :")
+        self._lbl_usb = QLabel(t("app_device_label"))
         self._lbl_usb.setObjectName("GroupTitle")
         db_lay.addWidget(self._lbl_usb)
 
@@ -219,14 +231,14 @@ class BootForgeMainWindow(QMainWindow):
         self._lbl_dev_meta.setVisible(False)
         db_lay.addWidget(self._lbl_dev_meta)
 
-        self._chk_show_locked = QCheckBox("Disques système (0)")
+        self._chk_show_locked = QCheckBox(f"{t('app_system_disks')} (0)")
         self._chk_show_locked.setToolTip("Afficher les disques système Windows verrouillés en lecture seule")
         self._chk_show_locked.toggled.connect(self._on_toggle_locked)
         db_lay.addWidget(self._chk_show_locked)
 
-        btn_ref_dev = QPushButton("Actualiser")
-        btn_ref_dev.clicked.connect(self.refresh_devices)
-        db_lay.addWidget(btn_ref_dev)
+        self._btn_refresh_dev = QPushButton(t("app_refresh"))
+        self._btn_refresh_dev.clicked.connect(self.refresh_devices)
+        db_lay.addWidget(self._btn_refresh_dev)
 
         main_vbox.addWidget(dev_bar)
 
@@ -300,14 +312,15 @@ class BootForgeMainWindow(QMainWindow):
         cw_lay.setSpacing(6)
 
         c_top = QHBoxLayout()
-        c_top.addWidget(QLabel("<b>Journal des opérations système</b>"))
+        self._lbl_console_title = QLabel(f"<b>{t('bar_journal_title')}</b>")
+        c_top.addWidget(self._lbl_console_title)
         c_top.addStretch()
-        btn_copy_log = QPushButton("Copier")
-        btn_copy_log.clicked.connect(self._copy_logs)
-        c_top.addWidget(btn_copy_log)
-        btn_clear_log = QPushButton("Effacer")
-        btn_clear_log.clicked.connect(self._clear_logs)
-        c_top.addWidget(btn_clear_log)
+        self._btn_copy_log = QPushButton(t("bar_journal_copy"))
+        self._btn_copy_log.clicked.connect(self._copy_logs)
+        c_top.addWidget(self._btn_copy_log)
+        self._btn_clear_log = QPushButton(t("bar_journal_clear"))
+        self._btn_clear_log.clicked.connect(self._clear_logs)
+        c_top.addWidget(self._btn_clear_log)
         btn_hide_log = QPushButton("✕")
         btn_hide_log.clicked.connect(lambda: self._btn_toggle_console.setChecked(False))
         c_top.addWidget(btn_hide_log)
@@ -329,11 +342,11 @@ class BootForgeMainWindow(QMainWindow):
         sb_lay.setContentsMargins(16, 7, 16, 7)
         sb_lay.setSpacing(12)
 
-        self._lbl_status_badge = QLabel("PRÊT")
+        self._lbl_status_badge = QLabel(t("status_badge_ready"))
         self._lbl_status_badge.setObjectName("MonoLabel")
         sb_lay.addWidget(self._lbl_status_badge)
 
-        self._lbl_status_msg = QLabel("Prêt")
+        self._lbl_status_msg = QLabel(t("status_ready"))
         sb_lay.addWidget(self._lbl_status_msg, 1)
 
         self._lbl_speed = QLabel()
@@ -351,13 +364,13 @@ class BootForgeMainWindow(QMainWindow):
         self._lbl_pct.setObjectName("MonoLabel")
         sb_lay.addWidget(self._lbl_pct)
 
-        self._btn_cancel = QPushButton("Annuler")
+        self._btn_cancel = QPushButton(t("bar_btn_cancel"))
         self._btn_cancel.setObjectName("DangerBtn")
         self._btn_cancel.setVisible(False)
         self._btn_cancel.clicked.connect(self._cancel_job)
         sb_lay.addWidget(self._btn_cancel)
 
-        self._btn_log_count = QPushButton("Journal (0)")
+        self._btn_log_count = QPushButton(t("bar_journal_btn", count=0))
         self._btn_log_count.clicked.connect(lambda: self._btn_toggle_console.setChecked(not self._btn_toggle_console.isChecked()))
         sb_lay.addWidget(self._btn_log_count)
 
@@ -374,6 +387,32 @@ class BootForgeMainWindow(QMainWindow):
         save_win_prefs({"theme": "dark" if self._dark_theme else "light"})
         self.apply_theme()
 
+    def _toggle_language(self) -> None:
+        cur = get_current_language()
+        nxt = "en" if cur == "fr" else "fr"
+        set_current_language(nxt)
+        self.apply_language()
+
+    def apply_language(self) -> None:
+        lang = get_current_language()
+        self._btn_lang.setText("FR 🇫🇷" if lang == "fr" else "EN 🇬🇧")
+        self._btn_lang.setToolTip(t("app_lang_tip"))
+        self._btn_toggle_console.setToolTip(t("app_console_tip"))
+        self._btn_theme.setToolTip(t("app_theme_tip"))
+        self._lbl_console_title.setText(f"<b>{t('bar_journal_title')}</b>")
+        self._btn_copy_log.setText(t("bar_journal_copy"))
+        self._btn_clear_log.setText(t("bar_journal_clear"))
+        self._btn_cancel.setText(t("bar_btn_cancel"))
+        self._btn_log_count.setText(t("bar_journal_btn", count=self._log_count))
+        if not self._task_ctrl.is_busy():
+            self._lbl_status_badge.setText(t("status_badge_ready"))
+            self._lbl_status_msg.setText(t("status_ready"))
+        self._view_direct.apply_language()
+        self._view_ventoy.apply_language()
+        self._view_toolbox.apply_language()
+        self._view_catalog.apply_language()
+        self.set_simple_mode(self._simple_mode, persist=False)
+
     def set_simple_mode(self, simple: bool, persist: bool = True) -> None:
         self._simple_mode = simple
         self._btn_mode_simple.setChecked(simple)
@@ -383,11 +422,11 @@ class BootForgeMainWindow(QMainWindow):
             save_win_prefs({"mode": "simple" if simple else "advanced"})
 
         if simple:
-            self._btn_tab_direct.setText("Créer une clé")
-            self._btn_tab_ventoy.setText("Multi-OS")
-            self._btn_tab_toolbox.setText("Réparer")
-            self._btn_tab_catalog.setText("Télécharger")
-            self._lbl_usb.setText("Clé USB :")
+            self._btn_tab_direct.setText(t("nav_direct_simple"))
+            self._btn_tab_ventoy.setText(t("nav_ventoy_simple"))
+            self._btn_tab_toolbox.setText(t("nav_toolbox_simple"))
+            self._btn_tab_catalog.setText(t("nav_catalog_simple"))
+            self._lbl_usb.setText(t("app_device_label"))
             self._chk_show_locked.setVisible(False)
             self._btn_toggle_console.setVisible(False)
             self._btn_log_count.setVisible(False)
@@ -395,17 +434,23 @@ class BootForgeMainWindow(QMainWindow):
             self._progress_bar.setVisible(self._task_ctrl.is_busy())
             self._lbl_pct.setVisible(self._task_ctrl.is_busy())
         else:
-            self._btn_tab_direct.setText("Flash direct")
-            self._btn_tab_ventoy.setText("Multi-Boot")
-            self._btn_tab_toolbox.setText("Outils USB")
-            self._btn_tab_catalog.setText("Catalogue ISO")
-            self._lbl_usb.setText("Périphérique cible :")
+            self._btn_tab_direct.setText(t("nav_direct_adv"))
+            self._btn_tab_ventoy.setText(t("nav_ventoy_adv"))
+            self._btn_tab_toolbox.setText(t("nav_toolbox_adv"))
+            self._btn_tab_catalog.setText(t("nav_catalog_adv"))
+            self._lbl_usb.setText(t("app_device_target"))
             self._chk_show_locked.setVisible(True)
             self._btn_toggle_console.setVisible(True)
             self._btn_log_count.setVisible(True)
             self._lbl_status_badge.setVisible(True)
             self._progress_bar.setVisible(True)
             self._lbl_pct.setVisible(True)
+
+        self._btn_mode_simple.setText(t("mode_simple"))
+        self._btn_mode_adv.setText(t("mode_advanced"))
+        self._btn_mode_simple.setToolTip(t("mode_simple_tip"))
+        self._btn_mode_adv.setToolTip(t("mode_advanced_tip"))
+        self._btn_refresh_dev.setText(t("app_refresh"))
 
         self._view_direct.set_simple_mode(simple)
         self._view_ventoy.set_simple_mode(simple)
@@ -440,7 +485,7 @@ class BootForgeMainWindow(QMainWindow):
         try:
             self._cmb_device.clear()
             sys_cnt = sum(1 for d in self._devices if d.get("is_system_disk"))
-            self._chk_show_locked.setText(f"Disques système ({sys_cnt})")
+            self._chk_show_locked.setText(f"{t('app_system_disks')} ({sys_cnt})")
 
             visible = (
                 list(self._devices)

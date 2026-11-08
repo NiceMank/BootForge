@@ -15,6 +15,7 @@ gi.require_version("Gio", "2.0")
 from gi.repository import Adw, Gdk, Gio, Gtk
 
 from engine.disk_utils import sanitize_volume_label
+from engine.i18n import t
 from bootforge_ui.backend import ActiveProcessController, launch_qemu_preview
 from bootforge_ui.theme import esc, make_icon_button, set_button_text
 from bootforge_ui.widgets import present_confirm_destroy_dialog
@@ -190,6 +191,20 @@ class ToolboxView(Gtk.ScrolledWindow):
         self.set_simple_mode(True)
         self.sync_sensitivity()
 
+    def apply_language(self) -> None:
+        """Update localized strings."""
+        self._sw_destructive_bb.set_title(t("toolbox_bb_destructive_chk"))
+        self._row_backup.set_title(t("toolbox_backup_title"))
+        self._row_backup.set_subtitle(t("toolbox_backup_desc"))
+        self._btn_backup.set_label(t("toolbox_backup_btn"))
+        self._row_qemu.set_title(t("toolbox_qemu_title"))
+        self._row_qemu.set_subtitle(t("toolbox_qemu_desc"))
+        self._btn_qemu.set_label(t("toolbox_qemu_btn"))
+        self._combo_wipe_scheme.set_title(t("toolbox_wipe_lbl_table"))
+        self._combo_wipe_fs.set_title(t("toolbox_wipe_lbl_format"))
+        self._entry_wipe_label.set_title(t("toolbox_wipe_lbl_name"))
+        self.set_simple_mode(self._simple_mode)
+
     def set_simple_mode(self, simple: bool) -> None:
         self._simple_mode = simple
         if simple:
@@ -197,62 +212,60 @@ class ToolboxView(Gtk.ScrolledWindow):
             self._cols.set_orientation(Gtk.Orientation.VERTICAL)
             self._cols.set_homogeneous(False)
 
-            self._grp_hash.set_title(esc("Vérifier qu’un fichier téléchargé n’est pas abîmé"))
-            self._grp_hash.set_description(esc("Optionnel : compare votre fichier ISO avec le code officiel fourni sur le site."))
-            self._expected_entry.set_title("Code de vérification du site (facultatif)")
-            self._hash_action_row.set_title("Contrôler le fichier")
-            self._hash_action_row.set_subtitle("Analyse le fichier sur votre ordinateur")
-            set_button_text(self._btn_calc_hash, "Vérifier le fichier")
+            self._grp_hash.set_title(esc(t("toolbox_hash_title_simple")))
+            self._grp_hash.set_description(esc(t("toolbox_hash_desc_simple")))
+            self._expected_entry.set_title(t("toolbox_hash_expected_ph"))
+            self._hash_action_row.set_title(t("toolbox_hash_title_simple"))
+            self._hash_action_row.set_subtitle(t("toolbox_hash_desc_simple"))
+            set_button_text(self._btn_calc_hash, t("toolbox_hash_btn_simple"))
 
-            self._grp_health.set_title(esc("Vérifier l’état de la clé USB"))
-            self._grp_health.set_description(esc("Recherche les erreurs matérielles sans rien effacer."))
+            self._grp_health.set_title(esc(t("toolbox_bb_title_simple")))
+            self._grp_health.set_description(esc(t("toolbox_bb_desc_simple")))
             self._sw_destructive_bb.set_active(False)
-            self._row_bb.set_title("Contrôle de fiabilité (lecture seule)")
-            self._row_bb.set_subtitle("Vérifie que les fichiers peuvent être relus sans erreur")
-            self._btn_badblocks.set_label("Tester la clé")
+            self._row_bb.set_title(t("toolbox_bb_title_simple"))
+            self._row_bb.set_subtitle(t("toolbox_bb_desc_simple"))
+            self._btn_badblocks.set_label(t("toolbox_bb_btn_simple"))
 
-            self._grp_diag.set_title(esc("Vitesse de la clé USB"))
-            self._grp_diag.set_description(esc("Mesure la rapidité de lecture de votre clé sur ce port USB."))
-            self._row_bench.set_title("Tester la vitesse de lecture")
-            self._row_bench.set_subtitle("Sans danger — ne modifie pas vos données")
-            self._btn_bench.set_label("Mesurer")
+            self._grp_diag.set_title(esc(t("toolbox_bench_title_simple")))
+            self._grp_diag.set_description(esc(t("toolbox_bench_desc_simple")))
+            self._row_bench.set_title(t("toolbox_bench_title_simple"))
+            self._row_bench.set_subtitle(t("toolbox_bench_desc_simple"))
+            self._btn_bench.set_label(t("toolbox_bench_btn_simple"))
 
-            self._grp_wipe.set_title(esc("Réparer une clé USB (tout effacer)"))
-            self._grp_wipe.set_description(
-                esc("Si votre clé affiche une capacité réduite ou n’est plus reconnue, ce nettoyage restaure toute sa taille d’origine.")
-            )
-            self._row_wipe_act.set_title("Remettre la clé comme neuve")
-            self._row_wipe_act.set_subtitle("Formate toute la clé en un volume compatible Windows, Mac et Linux")
-            self._btn_wipe.set_label("Tout effacer et réparer")
+            self._grp_wipe.set_title(esc(t("toolbox_wipe_title_simple")))
+            self._grp_wipe.set_description(esc(t("toolbox_wipe_desc_simple")))
+            self._row_wipe_act.set_title(t("toolbox_wipe_title_simple"))
+            self._row_wipe_act.set_subtitle(t("toolbox_wipe_desc_simple"))
+            self._btn_wipe.set_label(t("toolbox_wipe_btn_simple"))
         else:
             self._clamp.set_maximum_size(1180)
             self._cols.set_orientation(Gtk.Orientation.HORIZONTAL)
             self._cols.set_homogeneous(True)
 
-            self._grp_hash.set_title(esc("Vérificateur d’empreintes (SHA-256 / SHA-1 / MD5)"))
-            self._grp_hash.set_description(esc("Calcul en streaming et comparaison en temps constant."))
-            self._expected_entry.set_title("Empreinte attendue (optionnelle)")
-            self._hash_action_row.set_title("Calculer les empreintes du fichier")
-            self._hash_action_row.set_subtitle("Génère SHA-256, SHA-1 et MD5")
-            set_button_text(self._btn_calc_hash, "Calculer et vérifier")
+            self._grp_hash.set_title(esc(t("toolbox_hash_title_adv")))
+            self._grp_hash.set_description(esc(t("toolbox_hash_desc_adv")))
+            self._expected_entry.set_title(t("toolbox_hash_expected"))
+            self._hash_action_row.set_title(t("toolbox_hash_title_adv"))
+            self._hash_action_row.set_subtitle(t("toolbox_hash_desc_adv"))
+            set_button_text(self._btn_calc_hash, t("toolbox_hash_btn_adv"))
 
-            self._grp_health.set_title(esc("Contrôle de surface (badblocks) et clone disque"))
-            self._grp_health.set_description(esc("Détection de secteurs défectueux ou fausses capacités et sauvegarde brute."))
-            self._row_bb.set_title("Analyser les secteurs (/sbin/badblocks -b 4096)")
-            self._row_bb.set_subtitle("Mode lecture seule par défaut ; activez -w ci-dessus pour test destructif")
-            self._btn_badblocks.set_label("Lancer badblocks")
+            self._grp_health.set_title(esc(t("toolbox_bb_title_adv")))
+            self._grp_health.set_description(esc(t("toolbox_bb_desc_adv")))
+            self._row_bb.set_title(t("toolbox_bb_title_adv"))
+            self._row_bb.set_subtitle(t("toolbox_bb_desc_adv"))
+            self._btn_badblocks.set_label(t("toolbox_bb_btn_adv"))
 
-            self._grp_diag.set_title(esc("Diagnostic matériel et aperçu VM"))
-            self._grp_diag.set_description(esc("Mesure de débit séquentiel (256 Mio) et boot virtuel QEMU/OVMF."))
-            self._row_bench.set_title("Benchmark lecture séquentielle (256 Mio)")
-            self._row_bench.set_subtitle("Évalue la vitesse réelle sur ce port USB")
-            self._btn_bench.set_label("Mesurer")
+            self._grp_diag.set_title(esc(t("toolbox_bench_title_adv")))
+            self._grp_diag.set_description(esc(t("toolbox_bench_desc_adv")))
+            self._row_bench.set_title(t("toolbox_bench_title_adv"))
+            self._row_bench.set_subtitle(t("toolbox_bench_desc_adv"))
+            self._btn_bench.set_label(t("toolbox_bench_btn_adv"))
 
-            self._grp_wipe.set_title(esc("Remise à zéro d’usine"))
-            self._grp_wipe.set_description(esc("Supprime VTOYEFI, casper-rw ou ISO9660 et recrée une partition unique."))
-            self._row_wipe_act.set_title("Effacement et réinitialisation")
-            self._row_wipe_act.set_subtitle("Restaure 100 % de la capacité sur une table propre")
-            self._btn_wipe.set_label("Effacer et restaurer")
+            self._grp_wipe.set_title(esc(t("toolbox_wipe_title_adv")))
+            self._grp_wipe.set_description(esc(t("toolbox_wipe_desc_adv")))
+            self._row_wipe_act.set_title(t("toolbox_wipe_title_adv"))
+            self._row_wipe_act.set_subtitle(t("toolbox_wipe_desc_adv"))
+            self._btn_wipe.set_label(t("toolbox_wipe_btn_adv"))
 
         self._sw_destructive_bb.set_visible(not simple)
         self._row_backup.set_visible(not simple)

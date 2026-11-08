@@ -95,7 +95,8 @@ jobs:
       - name: Compile NSIS Installer (.exe)
         shell: pwsh
         run: |
-          & makensis "-DVERSION=1.0.0" packaging\win_installer.nsi
+          $ver = python -c "import sys; sys.path.insert(0, '.'); from bootforge_ui import __version__; print(__version__)"
+          & makensis "-DVERSION=$ver" packaging\win_installer.nsi
           Get-ChildItem -Path release
 
       - name: Upload Windows packages
@@ -139,6 +140,9 @@ jobs:
           echo "CHECKSUMS<<EOF" >> $GITHUB_ENV
           cat SHA256SUMS.txt >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          echo "RELEASE_VERSION=${VERSION}" >> $GITHUB_ENV
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -156,12 +160,12 @@ jobs:
             ### 📦 Paquets disponibles au téléchargement
 
             #### 🐧 Linux (Ubuntu, Debian, Linux Mint, Pop!_OS, Fedora, Arch...)
-            - **`bootforge_1.0.0_all.deb`** : Paquet d'installation natif Debian/Ubuntu avec intégration bureau, icônes hicolor et raccourcis.
-            - **`BootForge-1.0.0-linux.tar.gz`** : Archive portable autonome prête à l'emploi (`./bootforge`).
+            - **`bootforge_${{ env.RELEASE_VERSION }}_all.deb`** : Paquet d'installation natif Debian/Ubuntu avec intégration bureau, icônes hicolor et raccourcis.
+            - **`BootForge-${{ env.RELEASE_VERSION }}-linux.tar.gz`** : Archive portable autonome prête à l'emploi (`./bootforge`).
 
             #### 🪟 Windows (Windows 10 / Windows 11 - 64 bits)
-            - **`BootForge-1.0.0-win64-setup.exe`** : Programme d'installation Windows classique avec raccourcis Menu Démarrer et Bureau.
-            - **`BootForge-1.0.0-win64-portable.zip`** : Version portable sans installation, à décompresser et lancer directement (`BootForge.exe`).
+            - **`BootForge-${{ env.RELEASE_VERSION }}-win64-setup.exe`** : Programme d'installation Windows classique avec raccourcis Menu Démarrer et Bureau.
+            - **`BootForge-${{ env.RELEASE_VERSION }}-win64-portable.zip`** : Version portable sans installation, à décompresser et lancer directement (`BootForge.exe`).
 
             ---
 
@@ -187,6 +191,10 @@ jobs:
 
             4. **Catalogue officiel d'OS** :
                - Téléchargement direct en un clic d'images vérifiées : Windows 11, Ubuntu 24.04 LTS, Linux Mint, Debian 12, Fedora, Arch Linux, Kali Linux, Proxmox VE, Clonezilla, SystemRescue, etc.
+
+            5. **Interface bilingue instantanée / Instant Bilingual UI (FR 🇫🇷 / EN 🇬🇧)** :
+               - Basculement instantané de langue en direct via le bouton de la barre de titre, sans redémarrage requis.
+               - Instant on-the-fly language switching from the HeaderBar without requiring an application restart.
 
             ---
 

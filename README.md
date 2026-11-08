@@ -80,6 +80,11 @@ A single toggle switch in the header bar adapts the interface to your workflow:
   - **Security & Tech**: Arch Linux, Kali Linux, Proxmox VE.
   - **Rescue & Maintenance**: SystemRescue, GParted Live, Clonezilla.
 
+### 🌍 5. Live Bilingual Localization (English & French)
+- **Instant Language Switcher**: Switch between English (`EN 🇬🇧`) and French (`FR 🇫🇷`) directly from the header bar without restarting the app.
+- **Idiomatic Localized Content**: All 4 workspaces, dialogs, status monitors, speed counters, and pre-flight prompts are fully localized.
+- **Automatic System Detection**: Detects your operating system's language on first launch and remembers your preference.
+
 ---
 
 ## 📥 Download & Installation
@@ -90,21 +95,21 @@ Grab pre-built packages from the [GitHub Releases page](https://github.com/NiceM
 
 #### Option A: Native Debian/Ubuntu Package (`.deb`)
 ```bash
-sudo apt install ./bootforge_1.0.0_all.deb
+sudo apt install ./bootforge_1.0.1_all.deb
 ```
 BootForge will appear in your desktop application launcher (GNOME, KDE, XFCE).
 
 #### Option B: Standalone Portable Archive
 ```bash
-tar -xzf BootForge-1.0.0-linux.tar.gz
-cd BootForge-1.0.0-linux
+tar -xzf BootForge-1.0.1-linux.tar.gz
+cd BootForge-1.0.1-linux
 ./bootforge
 ```
 
 ### 🪟 Windows (Windows 10 / Windows 11 - 64-bit)
 
-- **Setup Installer**: Download `BootForge-1.0.0-win64-setup.exe` and follow the wizard.
-- **Portable Zip**: Extract `BootForge-1.0.0-win64-portable.zip` and run `BootForge.exe`.
+- **Setup Installer**: Download `BootForge-1.0.1-win64-setup.exe` and follow the wizard.
+- **Portable Zip**: Extract `BootForge-1.0.1-win64-portable.zip` and run `BootForge.exe`.
 
 ---
 
@@ -148,7 +153,7 @@ bash packaging/build_deb.sh
 ### Building Windows Binaries
 ```powershell
 python packaging/build_windows.py
-makensis -DVERSION=1.0.0 packaging/win_installer.nsi
+makensis -DVERSION=1.0.1 packaging/win_installer.nsi
 ```
 
 ---
