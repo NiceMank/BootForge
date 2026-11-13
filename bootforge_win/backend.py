@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import ctypes
 import json
 import os
@@ -10,6 +11,7 @@ import sys
 import tempfile
 import threading
 import urllib.parse
+import weakref
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -44,6 +46,14 @@ class AsyncHelper(QObject):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._threads: List[QThread] = []
+        self_ref = weakref.ref(self)
+
+        def _on_exit() -> None:
+            helper = self_ref()
+            if helper is not None:
+                helper.wait_all(25000)
+
+        atexit.register(_on_exit)
 
     def run_fn(self, fn: Callable[[], Any], on_ok: Callable[[Any], None], on_err: Callable[[str], None]) -> None:
         t = _CallableWorker(fn, self)
@@ -59,7 +69,7 @@ class AsyncHelper(QObject):
         t.finished.connect(_cleanup)
         t.start()
 
-    def wait_all(self, timeout_ms: int = 3000) -> None:
+    def wait_all(self, timeout_ms: int = 25000) -> None:
         for t in list(self._threads):
             if t.isRunning():
                 t.wait(timeout_ms)

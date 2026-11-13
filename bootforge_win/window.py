@@ -683,7 +683,7 @@ class BootForgeMainWindow(QMainWindow):
         dlg.exec()
 
     def closeEvent(self, event: Any) -> None:
-        self._async_helper.wait_all(3000)
+        self._async_helper.wait_all(25000)
         super().closeEvent(event)
 
 
