@@ -2,7 +2,7 @@
 
 [ 🇬🇧 English ](README.md) | [ 🇫🇷 Français ](README.fr.md)
 
-[![CI Build](https://github.com/NiceMank/BootForge/actions/workflows/build.yml/badge.svg)](https://github.com/NiceMank/BootForge/actions/workflows/build.yml)
+[![CI Build](https://github.com/NiceMank/BootForge/actions/workflows/ci-release.yml/badge.svg)](https://github.com/NiceMank/BootForge/actions/workflows/ci-release.yml)
 [![GitHub Release](https://img.shields.io/github/v/release/NiceMank/BootForge?color=blue&logo=github)](https://github.com/NiceMank/BootForge/releases)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Platform Linux](https://img.shields.io/badge/Platform-Linux-orange?logo=linux)](https://github.com/NiceMank/BootForge/releases)
@@ -71,15 +71,18 @@ Un bouton de bascule instantané dans l'en-tête permet d'adapter l'interface à
 - **Test en machine virtuelle** : Démarrage direct de la clé en émulation sécurisée sous QEMU (UEFI OVMF ou BIOS hérité).
 
 ### 🌐 4. Catalogue d'OS vérifiés
-- Téléchargement direct en un clic d'images officielles fiables depuis les serveurs certifiés des éditeurs :
-  - **Grand public** : Windows 11, Ubuntu 24.04 LTS, Linux Mint 22, Debian 12, Fedora Workstation.
-  - **Experts & Sécurité** : Arch Linux, Kali Linux, Proxmox VE.
-  - **Dépannage & Sauvegarde** : SystemRescue, GParted Live, Clonezilla.
+- Téléchargement direct en un clic d'images officielles fiables depuis les miroirs HTTPS des éditeurs (TLS >= 1.2 strict, redirections HTTP non chiffrées bloquées) :
+  - **Bureau** : Ubuntu 24.04.2 LTS, Linux Mint 22.1 Cinnamon, Debian 12.10 Live Standard.
+  - **Sécurité & Dépannage** : Kali Linux Live, SystemRescue 11.03, GParted Live.
 
 ### 🌍 5. Interface bilingue en direct (Français et Anglais)
 - **Basculement instantané** : Changez de langue à tout moment entre le Français (`FR 🇫🇷`) et l'Anglais (`EN 🇬🇧`) depuis la barre de titre, sans redémarrer le logiciel.
 - **Traductions natives soignées** : Les 4 espaces de travail, les fenêtres d'options, les indicateurs d'état et les avertissements de sécurité sont intégralement traduits.
 - **Détection automatique du système** : Détecte la langue de votre système d'exploitation dès le premier lancement et mémorise votre préférence.
+
+### 🔄 6. Mises à jour automatiques vérifiées cryptographiquement (GitHub Releases)
+- Interrogation stricte de `NiceMank/BootForge` via HTTPS épinglé (`api.github.com` / `github.com`).
+- Vérification hors ligne du manifeste (`BOOTFORGE_MANIFEST.json` + `.sig`) par signature **Ed25519** (Python pur, zéro dépendance), protection **anti-downgrade SemVer**, contrôle atomique **SHA-256** (avec revérification anti-TOCTOU avant exécution) et report automatique si une écriture USB est en cours.
 
 ---
 
@@ -138,7 +141,7 @@ python bootforge
 
 ### Exécuter la suite de tests
 ```bash
-python3 -m unittest discover -s engine/tests -v
+pytest -v
 ```
 
 ### Construire les paquets Linux

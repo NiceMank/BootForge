@@ -114,14 +114,26 @@ class ToolboxView(Gtk.ScrolledWindow):
 
         self._row_backup = Adw.ActionRow(
             use_markup=False,
-            title="Cloner la clé USB vers un fichier",
-            subtitle="Export brut .img ou compressé .img.gz",
+            title=t("toolbox_backup_title"),
+            subtitle=t("toolbox_backup_desc"),
         )
-        self._btn_backup = Gtk.Button(label="Sauvegarder (.img)...")
+        self._btn_backup = Gtk.Button(label=t("toolbox_backup_btn"))
         self._btn_backup.set_valign(Gtk.Align.CENTER)
         self._btn_backup.connect("clicked", self._run_backup)
         self._row_backup.add_suffix(self._btn_backup)
         self._grp_health.add(self._row_backup)
+
+        self._row_restore = Adw.ActionRow(
+            use_markup=False,
+            title=t("toolbox_clone_restore_opt"),
+            subtitle=t("toolbox_clone_desc"),
+        )
+        self._btn_restore = Gtk.Button(label=t("toolbox_clone_btn_restore"))
+        self._btn_restore.add_css_class("destructive-action")
+        self._btn_restore.set_valign(Gtk.Align.CENTER)
+        self._btn_restore.connect("clicked", self._run_restore)
+        self._row_restore.add_suffix(self._btn_restore)
+        self._grp_health.add(self._row_restore)
         left_col.append(self._grp_health)
 
         self._cols.append(left_col)
@@ -197,6 +209,9 @@ class ToolboxView(Gtk.ScrolledWindow):
         self._row_backup.set_title(t("toolbox_backup_title"))
         self._row_backup.set_subtitle(t("toolbox_backup_desc"))
         self._btn_backup.set_label(t("toolbox_backup_btn"))
+        self._row_restore.set_title(t("toolbox_clone_restore_opt"))
+        self._row_restore.set_subtitle(t("toolbox_clone_desc"))
+        self._btn_restore.set_label(t("toolbox_clone_btn_restore"))
         self._row_qemu.set_title(t("toolbox_qemu_title"))
         self._row_qemu.set_subtitle(t("toolbox_qemu_desc"))
         self._btn_qemu.set_label(t("toolbox_qemu_btn"))
@@ -269,6 +284,7 @@ class ToolboxView(Gtk.ScrolledWindow):
 
         self._sw_destructive_bb.set_visible(not simple)
         self._row_backup.set_visible(not simple)
+        self._row_restore.set_visible(not simple)
         self._row_qemu.set_visible(not simple)
         self._combo_wipe_scheme.set_visible(not simple)
         self._combo_wipe_fs.set_visible(not simple)
@@ -311,6 +327,7 @@ class ToolboxView(Gtk.ScrolledWindow):
         self._btn_calc_hash.set_sensitive(not busy)
         self._btn_badblocks.set_sensitive(dev_ok and not busy)
         self._btn_backup.set_sensitive(dev_ok and not busy)
+        self._btn_restore.set_sensitive(dev_ok and not busy)
         self._btn_bench.set_sensitive(dev_ok and not busy)
         self._btn_qemu.set_sensitive(dev_ok and not busy)
         self._btn_wipe.set_sensitive(dev_ok and not busy)
@@ -440,6 +457,47 @@ class ToolboxView(Gtk.ScrolledWindow):
                 pass
 
         dlg.save(win, None, _done)
+
+    def _run_restore(self, *_args: Any) -> None:
+        dev = self._get_device()
+        if not dev:
+            return
+        dlg = Gtk.FileDialog(title=t("toolbox_clone_restore_opt"))
+        flt = Gtk.FileFilter()
+        flt.set_name("Disk images (*.img, *.img.gz, *.img.xz)")
+        flt.add_pattern("*.img")
+        flt.add_pattern("*.img.gz")
+        flt.add_pattern("*.img.xz")
+        flt.add_pattern("*.gz")
+        flt.add_pattern("*.xz")
+        flts = Gio.ListStore.new(Gtk.FileFilter)
+        flts.append(flt)
+        dlg.set_filters(flts)
+        win = self.get_root()
+        assert isinstance(win, Gtk.Window)
+
+        def _done(source: Gtk.FileDialog, res: Gio.AsyncResult) -> None:
+            try:
+                f = source.open_finish(res)
+                if f and f.get_path():
+                    img_p = f.get_path() or ""
+                    job = {
+                        "action": "usb_restore_img",
+                        "device": dev["path"],
+                        "image_path": img_p,
+                    }
+                    present_confirm_destroy_dialog(
+                        self,
+                        dev,
+                        t("toolbox_clone_restore_opt"),
+                        f"{t('toolbox_clone_desc')} ({os.path.basename(img_p)})",
+                        lambda: self._on_start_job(job, False),
+                        simple_mode=self._simple_mode,
+                    )
+            except Exception:
+                pass
+
+        dlg.open(win, None, _done)
 
     def _run_wipe(self, *_args: Any) -> None:
         dev = self._get_device()

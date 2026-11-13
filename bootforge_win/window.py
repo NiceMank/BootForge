@@ -27,7 +27,8 @@ from PyQt6.QtWidgets import (
 
 from bootforge_ui import __version__
 from bootforge_win.backend import AsyncHelper, WinTaskController
-from bootforge_win.dialogs import AboutDialog, PreflightDialog
+from bootforge_win.dialogs import AboutDialog, PreflightDialog, UpdatesWinDialog
+from engine.updater import UpdateCheckResult, check_for_update
 from bootforge_win.theme import (
     RESOURCE_ROOT,
     build_qss,
@@ -75,6 +76,7 @@ class BootForgeMainWindow(QMainWindow):
         self._show_locked = False
         self._log_count = 0
         self._syncing_dropdown = False
+        self._latest_update_result: Optional[UpdateCheckResult] = None
 
         prefs = load_win_prefs()
         self._simple_mode = prefs.get("mode", "simple") != "advanced"
@@ -91,6 +93,8 @@ class BootForgeMainWindow(QMainWindow):
 
         # Initial device scan
         self.refresh_devices()
+        if prefs.get("auto_check_updates", True) and os.environ.get("BOOTFORGE_NO_STARTUP_UPDATE") != "1":
+            QTimer.singleShot(3000, self._schedule_startup_update_check)
 
         if initial_iso and os.path.isfile(initial_iso):
             self._view_direct.load_iso_external(initial_iso)
@@ -195,15 +199,20 @@ class BootForgeMainWindow(QMainWindow):
         self._btn_lang.clicked.connect(self._toggle_language)
         th_lay.addWidget(self._btn_lang)
 
-        btn_tools = QPushButton("⚙️")
-        btn_tools.setToolTip(t("app_tools_tip"))
-        btn_tools.clicked.connect(self._open_preflight)
-        th_lay.addWidget(btn_tools)
+        self._btn_tools = QPushButton("⚙️")
+        self._btn_tools.setToolTip(t("app_tools_tip"))
+        self._btn_tools.clicked.connect(self._open_preflight)
+        th_lay.addWidget(self._btn_tools)
 
-        btn_about = QPushButton("ℹ️")
-        btn_about.setToolTip(t("app_about_tip"))
-        btn_about.clicked.connect(self._open_about)
-        th_lay.addWidget(btn_about)
+        self._btn_updates = QPushButton("🔄")
+        self._btn_updates.setToolTip(t("app_updates_tip"))
+        self._btn_updates.clicked.connect(self._open_updates)
+        th_lay.addWidget(self._btn_updates)
+
+        self._btn_about = QPushButton("ℹ️")
+        self._btn_about.setToolTip(t("app_about_tip"))
+        self._btn_about.clicked.connect(self._open_about)
+        th_lay.addWidget(self._btn_about)
 
         main_vbox.addWidget(top_header)
 
@@ -399,6 +408,9 @@ class BootForgeMainWindow(QMainWindow):
         self._btn_lang.setToolTip(t("app_lang_tip"))
         self._btn_toggle_console.setToolTip(t("app_console_tip"))
         self._btn_theme.setToolTip(t("app_theme_tip"))
+        self._btn_tools.setToolTip(t("app_tools_tip"))
+        self._btn_updates.setToolTip(t("app_updates_tip"))
+        self._btn_about.setToolTip(t("app_about_tip"))
         self._lbl_console_title.setText(f"<b>{t('bar_journal_title')}</b>")
         self._btn_copy_log.setText(t("bar_journal_copy"))
         self._btn_clear_log.setText(t("bar_journal_clear"))
@@ -495,7 +507,7 @@ class BootForgeMainWindow(QMainWindow):
             self._visible_devices = visible
 
             if not visible:
-                self._cmb_device.addItem("Branchez une clé USB puis cliquez sur Actualiser")
+                self._cmb_device.addItem(t("app_no_device"))
                 self._selected_device_path = ""
             else:
                 for d in visible:
@@ -648,9 +660,31 @@ class BootForgeMainWindow(QMainWindow):
         dlg = PreflightDialog(deps=None, on_refresh=self.refresh_devices, parent=self)
         dlg.exec()
 
+    def _schedule_startup_update_check(self) -> None:
+        def _on_res(res: UpdateCheckResult) -> None:
+            self._latest_update_result = res
+            skipped = load_win_prefs().get("skipped_version", "")
+            if res.status == "available" and res.verified and res.latest_version != skipped:
+                self.show_toast(t("update_status_available", ver=res.latest_version, asset=res.asset_name))
+
+        self._async_helper.run_fn(check_for_update, _on_res, lambda _err: None)
+
+    def _open_updates(self) -> None:
+        dlg = UpdatesWinDialog(
+            is_busy_fn=self._task_ctrl.is_busy,
+            on_toast=self.show_toast,
+            initial_result=self._latest_update_result,
+            parent=self,
+        )
+        dlg.exec()
+
     def _open_about(self) -> None:
         dlg = AboutDialog(parent=self)
         dlg.exec()
+
+    def closeEvent(self, event: Any) -> None:
+        self._async_helper.wait_all(3000)
+        super().closeEvent(event)
 
 
 def run_windows_app(argv: Optional[List[str]] = None) -> int:

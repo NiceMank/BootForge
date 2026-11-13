@@ -31,14 +31,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 \
+            python3-pytest python3-cryptography \
             util-linux 7zip parted gdisk dosfstools ntfs-3g exfatprogs e2fsprogs \
             desktop-file-utils xvfb
 
-      - name: Syntax check & unit tests
+      - name: Syntax check, unit tests & GTK4 smoke test
         run: |
           python3 -m compileall -q bootforge_ui bootforge_win engine
-          python3 -m unittest discover -s engine/tests -v
+          pytest -v
           desktop-file-validate data/io.github.nicemank.BootForge.desktop
+          BOOTFORGE_NO_STARTUP_UPDATE=1 xvfb-run -a python3 -c "import gi; gi.require_version('Gtk', '4.0'); gi.require_version('Adw', '1'); from gi.repository import Adw, GLib; from bootforge_ui.window import BootForgeWindow; app = Adw.Application(application_id='io.github.nicemank.BootForge.CI'); app.connect('activate', lambda a: (BootForgeWindow(a), GLib.timeout_add(200, a.quit))); app.run([])"
 
       - name: Build .deb and portable tarball
         run: |
@@ -70,11 +72,14 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller PyQt6
+          python -m pip install -r requirements-win.txt pytest cryptography
 
-      - name: Run Windows test suite
+      - name: Run Windows test suite & PyQt6 smoke test
         run: |
-          python -m unittest discover -s engine/tests -v
+          pytest -v
+          $env:BOOTFORGE_NO_STARTUP_UPDATE = "1"
+          $env:QT_QPA_PLATFORM = "offscreen"
+          python -c "from PyQt6.QtWidgets import QApplication; from bootforge_win.window import BootForgeMainWindow; app = QApplication([]); w = BootForgeMainWindow(); w.close(); app.processEvents()"
 
       - name: Build Windows binary and portable ZIP
         run: |
@@ -130,9 +135,13 @@ jobs:
           name: bootforge-windows-packages
           path: dist-release
 
-      - name: Generate Checksums & Release Notes
+      - name: Generate Checksums, Signed Update Manifest & Release Notes
         id: notes
+        env:
+          BOOTFORGE_SIGNING_KEY: ${{ secrets.BOOTFORGE_SIGNING_KEY }}
         run: |
+          python3 -m pip install --quiet cryptography
+          python3 packaging/sign_release.py --dist-dir dist-release --tag "${{ github.ref_name }}" --require-signature
           cd dist-release
           ls -la
           sha256sum * > SHA256SUMS.txt

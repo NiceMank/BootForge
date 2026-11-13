@@ -2,7 +2,7 @@
 
 [ 🇬🇧 English ](README.md) | [ 🇫🇷 Français ](README.fr.md)
 
-[![CI Build](https://github.com/NiceMank/BootForge/actions/workflows/build.yml/badge.svg)](https://github.com/NiceMank/BootForge/actions/workflows/build.yml)
+[![CI Build](https://github.com/NiceMank/BootForge/actions/workflows/ci-release.yml/badge.svg)](https://github.com/NiceMank/BootForge/actions/workflows/ci-release.yml)
 [![GitHub Release](https://img.shields.io/github/v/release/NiceMank/BootForge?color=blue&logo=github)](https://github.com/NiceMank/BootForge/releases)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Platform Linux](https://img.shields.io/badge/Platform-Linux-orange?logo=linux)](https://github.com/NiceMank/BootForge/releases)
@@ -75,15 +75,18 @@ A single toggle switch in the header bar adapts the interface to your workflow:
 - **Virtual Machine Boot Test**: Directly test-boot your USB drive in an isolated QEMU environment (UEFI OVMF or Legacy BIOS).
 
 ### 🌐 4. Verified OS Catalog
-- One-click downloads of official ISO images directly from upstream mirrors:
-  - **Desktop**: Windows 11, Ubuntu 24.04 LTS, Linux Mint 22, Debian 12, Fedora Workstation.
-  - **Security & Tech**: Arch Linux, Kali Linux, Proxmox VE.
-  - **Rescue & Maintenance**: SystemRescue, GParted Live, Clonezilla.
+- One-click HTTPS downloads of official ISO images directly from upstream mirrors (strict TLS >= 1.2, HTTP downgrade redirects blocked):
+  - **Desktop**: Ubuntu 24.04.2 LTS, Linux Mint 22.1 Cinnamon, Debian 12.10 Live Standard.
+  - **Security & Rescue**: Kali Linux Live, SystemRescue 11.03, GParted Live.
 
 ### 🌍 5. Live Bilingual Localization (English & French)
 - **Instant Language Switcher**: Switch between English (`EN 🇬🇧`) and French (`FR 🇫🇷`) directly from the header bar without restarting the app.
 - **Idiomatic Localized Content**: All 4 workspaces, dialogs, status monitors, speed counters, and pre-flight prompts are fully localized.
 - **Automatic System Detection**: Detects your operating system's language on first launch and remembers your preference.
+
+### 🔄 6. Cryptographically Verified Auto-Updater (GitHub Releases)
+- Checks official `NiceMank/BootForge` releases over pinned HTTPS endpoints.
+- Verifies release manifests (`BOOTFORGE_MANIFEST.json` + `.sig`) offline with a pinned pure-Python **Ed25519** signature check, enforces **SemVer anti-downgrade**, validates **SHA-256** atomically (`.part` + anti-TOCTOU re-check before execution), and defers updates automatically while any USB operation is active.
 
 ---
 
@@ -142,7 +145,7 @@ python bootforge
 
 ### Running Unit Tests
 ```bash
-python3 -m unittest discover -s engine/tests -v
+pytest -v
 ```
 
 ### Building Linux Packages

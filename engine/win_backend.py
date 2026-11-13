@@ -24,6 +24,7 @@ from engine.disk_utils import (
     SafetyViolationError,
     plan_partition_layout,
     sanitize_volume_label,
+    validate_paths_not_on_device,
 )
 from engine.iso_inspector import inspect_image
 from engine.unattend_builder import build_autounattend_xml
@@ -61,7 +62,10 @@ def is_windows_admin() -> bool:
         return False
 
 
-def _run_powershell_json(ps_script: str, timeout: int = 15) -> Any:
+def _run_powershell_json(ps_script: str, timeout: int = 15, extra_env: Optional[Dict[str, str]] = None) -> Any:
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
     proc = subprocess.run(
         [
             "powershell",
@@ -76,6 +80,7 @@ def _run_powershell_json(ps_script: str, timeout: int = 15) -> Any:
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=env,
         timeout=timeout,
         check=False,
     )
@@ -347,41 +352,39 @@ def _find_7z_windows() -> Optional[str]:
 
 def inspect_iso_windows_mounted(iso_path: str) -> List[Dict[str, str]]:
     """Read-only Mount-DiskImage inspection fallback on Windows when 7-Zip is not installed."""
-    safe_p = iso_path.replace("'", "''")
-    ps = f"""
-$img = Mount-DiskImage -ImagePath '{safe_p}' -NoDriveLetter:$false -PassThru -ErrorAction Stop
-try {{
+    ps = r"""
+$img = Mount-DiskImage -LiteralPath $env:BF_ISO_PATH -NoDriveLetter:$false -PassThru -ErrorAction Stop
+try {
     Start-Sleep -Milliseconds 350
     $vol = $img | Get-Volume | Select-Object -First 1
-    if ($vol -and $vol.DriveLetter) {{
-        $root = "$($vol.DriveLetter):\\"
-        Get-ChildItem -LiteralPath $root -Recurse -File -Force -ErrorAction SilentlyContinue | Select-Object -First 5000 | ForEach-Object {{
-            $rel = $_.FullName.Substring($root.Length) -replace '\\\\','/'
-            [PSCustomObject]@{{ Path = $rel; Size = [string]$_.Length }}
-        }} | ConvertTo-Json -Compress
-    }} else {{
+    if ($vol -and $vol.DriveLetter) {
+        $root = "$($vol.DriveLetter):\"
+        Get-ChildItem -LiteralPath $root -Recurse -File -Force -ErrorAction SilentlyContinue | Select-Object -First 5000 | ForEach-Object {
+            $rel = $_.FullName.Substring($root.Length) -replace '\\','/'
+            [PSCustomObject]@{ Path = $rel; Size = [string]$_.Length }
+        } | ConvertTo-Json -Compress
+    } else {
         "[]"
-    }}
-}} finally {{
-    Dismount-DiskImage -ImagePath '{safe_p}' -ErrorAction SilentlyContinue | Out-Null
-}}
+    }
+} finally {
+    Dismount-DiskImage -LiteralPath $env:BF_ISO_PATH -ErrorAction SilentlyContinue | Out-Null
+}
 """
-    data = _run_powershell_json(ps, timeout=25)
+    data = _run_powershell_json(ps, timeout=25, extra_env={"BF_ISO_PATH": iso_path})
     if isinstance(data, dict):
         return [data]
     return list(data or [])
 
 
 def _mount_iso_get_drive(iso_path: str) -> str:
-    safe_p = iso_path.replace("'", "''")
-    ps = f"""
-$img = Mount-DiskImage -ImagePath '{safe_p}' -PassThru -ErrorAction Stop
+    ps = r"""
+$img = Mount-DiskImage -LiteralPath $env:BF_ISO_PATH -PassThru -ErrorAction Stop
 Start-Sleep -Milliseconds 400
-$vol = $img | Get-Volume | Where-Object {{ $_.DriveLetter }} | Select-Object -First 1
-if (-not $vol) {{ throw "Aucun lecteur monté pour l'image ISO." }}
-[PSCustomObject]@{{ DriveLetter = [string]$vol.DriveLetter }} | ConvertTo-Json -Compress
+$vol = $img | Get-Volume | Where-Object { $_.DriveLetter } | Select-Object -First 1
+if (-not $vol) { throw "Aucun lecteur monté pour l'image ISO." }
+[PSCustomObject]@{ DriveLetter = [string]$vol.DriveLetter } | ConvertTo-Json -Compress
 """
-    res = _run_powershell_json(ps, timeout=20)
+    res = _run_powershell_json(ps, timeout=20, extra_env={"BF_ISO_PATH": iso_path})
     dl = str((res or {}).get("DriveLetter") or "").strip().rstrip(":")
     if not dl:
         raise RuntimeError("Impossible d'obtenir la lettre du lecteur ISO monté.")
@@ -389,7 +392,8 @@ if (-not $vol) {{ throw "Aucun lecteur monté pour l'image ISO." }}
 
 
 def _dismount_iso(iso_path: str) -> None:
-    safe_p = iso_path.replace("'", "''")
+    env = os.environ.copy()
+    env["BF_ISO_PATH"] = iso_path
     subprocess.run(
         [
             "powershell",
@@ -398,8 +402,9 @@ def _dismount_iso(iso_path: str) -> None:
             "-ExecutionPolicy",
             "Bypass",
             "-Command",
-            f"Dismount-DiskImage -ImagePath '{safe_p}' -ErrorAction SilentlyContinue | Out-Null",
+            "Dismount-DiskImage -LiteralPath $env:BF_ISO_PATH -ErrorAction SilentlyContinue | Out-Null",
         ],
+        env=env,
         capture_output=True,
         check=False,
     )
@@ -513,8 +518,24 @@ def _lock_and_dismount_disk_volumes(disk_num: int) -> List[int]:
         if h == INVALID_HANDLE_VALUE or not h:
             continue
         bytes_ret = ctypes.c_ulong(0)
-        kernel32.DeviceIoControl(h, FSCTL_LOCK_VOLUME, None, 0, None, 0, ctypes.byref(bytes_ret), None)
-        kernel32.DeviceIoControl(h, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0, ctypes.byref(bytes_ret), None)
+        locked = False
+        for _ in range(3):
+            if kernel32.DeviceIoControl(h, FSCTL_LOCK_VOLUME, None, 0, None, 0, ctypes.byref(bytes_ret), None):
+                locked = True
+                break
+            time.sleep(0.15)
+        if not locked:
+            err = ctypes.GetLastError()
+            kernel32.CloseHandle(h)
+            _close_handles(handles)
+            raise RuntimeError(
+                f"Impossible de verrouiller le volume {vol_path} (Win32={err}). Fermez les fenêtres de l'Explorateur."
+            )
+        if not kernel32.DeviceIoControl(h, FSCTL_DISMOUNT_VOLUME, None, 0, None, 0, ctypes.byref(bytes_ret), None):
+            err = ctypes.GetLastError()
+            kernel32.CloseHandle(h)
+            _close_handles(handles)
+            raise RuntimeError(f"Impossible de démonter le volume {vol_path} (Win32={err}).")
         handles.append(h)
     return handles
 
@@ -530,6 +551,17 @@ def _close_handles(handles: List[int]) -> None:
             pass
 
 
+def _open_windows_image_stream(image_path: str):
+    """Open raw, .gz, or .xz disk image cleanly and expose underlying compressed reader if applicable."""
+    lower_name = image_path.lower()
+    raw_fin = open(image_path, "rb")
+    if lower_name.endswith(".gz"):
+        return raw_fin, gzip.GzipFile(fileobj=raw_fin, mode="rb"), True
+    if lower_name.endswith(".xz"):
+        return raw_fin, lzma.open(raw_fin, mode="rb"), True
+    return raw_fin, raw_fin, False
+
+
 def _write_raw_windows_disk(
     disk_num: int,
     offset_bytes: int,
@@ -540,6 +572,9 @@ def _write_raw_windows_disk(
     label: str,
     base_pct: float,
     span_pct: float,
+    *,
+    max_bytes: Optional[int] = None,
+    raw_reader: Optional[Any] = None,
 ) -> None:
     """Write raw sector-aligned stream directly to \\\\.\\PhysicalDriveN after volume locking."""
     kernel32 = ctypes.windll.kernel32
@@ -583,6 +618,10 @@ def _write_raw_windows_disk(
                 rem = len(buf) % 512
                 if rem:
                     buf = buf + b"\x00" * (512 - rem)
+                if max_bytes is not None and offset_bytes + written + len(buf) > max_bytes:
+                    raise RuntimeError(
+                        f"L'image dépasse la capacité du périphérique cible ({max_bytes} octets)."
+                    )
                 c_buf = (ctypes.c_char * len(buf)).from_buffer_copy(buf)
                 ok = kernel32.WriteFile(h_disk, c_buf, len(buf), ctypes.byref(written_out), None)
                 if not ok:
@@ -592,7 +631,11 @@ def _write_raw_windows_disk(
                 if now - last_emit >= 0.25:
                     elapsed = max(now - t0, 0.001)
                     speed = written / elapsed
-                    pct = base_pct + min(span_pct, (written / max(total_hint, 1)) * span_pct)
+                    if raw_reader is not None:
+                        ratio = min(1.0, max(0.0, raw_reader.tell() / max(total_hint, 1)))
+                        pct = base_pct + ratio * span_pct
+                    else:
+                        pct = base_pct + min(span_pct, (written / max(total_hint, 1)) * span_pct)
                     emit_progress(
                         pct,
                         stage,
@@ -632,6 +675,7 @@ def execute_win_flash_direct(
         raise FileNotFoundError(f"Fichier image introuvable : {image_path}")
 
     dev_info, disk_num = validate_windows_target(device_path)
+    validate_paths_not_on_device(dev_info, image_path, driver_dir)
     img_info = inspect_image(image_path)
 
     emit_progress(2, "validate", f"Validation de {dev_info.path} ({dev_info.model})...")
@@ -653,27 +697,29 @@ def execute_win_flash_direct(
         emit_progress(6, "wipe", f"Nettoyage de {dev_info.path} via diskpart...")
         _run_diskpart([f"select disk {disk_num}", "clean", "exit"], emit_log)
 
-        lower_name = image_path.lower()
         total_size = os.path.getsize(image_path)
-        if lower_name.endswith(".gz"):
-            opener = lambda: gzip.open(image_path, "rb")
-        elif lower_name.endswith(".xz"):
-            opener = lambda: lzma.open(image_path, "rb")
-        else:
-            opener = lambda: open(image_path, "rb")
-
         emit_progress(10, "dd", "Écriture bloc par bloc (mode DD) en cours...")
-        _write_raw_windows_disk(
-            disk_num,
-            0,
-            opener,
-            total_size,
-            emit_progress,
-            "dd",
-            "Écriture DD",
-            10.0,
-            85.0,
-        )
+        raw_fin, stream_obj, is_compressed = _open_windows_image_stream(image_path)
+        try:
+            _write_raw_windows_disk(
+                disk_num,
+                0,
+                lambda: stream_obj,
+                total_size,
+                emit_progress,
+                "dd",
+                "Écriture DD",
+                10.0,
+                85.0,
+                max_bytes=dev_info.size_bytes,
+                raw_reader=raw_fin if is_compressed else None,
+            )
+        finally:
+            try:
+                if is_compressed:
+                    stream_obj.close()
+            finally:
+                raw_fin.close()
         _run_diskpart(["rescan", "exit"], emit_log)
         emit_progress(100, "done", "Image écrite en mode DD avec succès !")
         return
@@ -731,7 +777,9 @@ def execute_win_flash_direct(
             subprocess.run([sevenzip, "x", image_path, f"-o{extracted_tmp}", "-y"], check=True)
             iso_root = Path(extracted_tmp)
 
-        install_wim = iso_root / "sources" / "install.wim"
+        wim_candidates = (iso_root / "sources" / "install.wim", iso_root / "x64" / "sources" / "install.wim")
+        install_wim = next((p for p in wim_candidates if p.is_file()), wim_candidates[0])
+        wim_rel_dir = install_wim.parent.relative_to(iso_root)
         split_wim = False
         if (
             filesystem == "fat32"
@@ -740,7 +788,7 @@ def execute_win_flash_direct(
         ):
             if shutil.which("dism"):
                 split_wim = True
-                emit_log("info", "Découpe de install.wim (> 4 Go) en segments install.swm via DISM...")
+                emit_log("info", f"Découpe de {wim_rel_dir / 'install.wim'} (> 4 Go) en segments install.swm via DISM...")
             else:
                 raise RuntimeError("install.wim dépasse 4 Go : choisissez NTFS + UEFI:NTFS.")
 
@@ -762,12 +810,13 @@ def execute_win_flash_direct(
                 emit_progress(25 + (done_b / max(total_b, 1)) * 35, "copying", f"Copie {sf.name}...")
 
             emit_progress(62, "wimsplit", "Découpe de install.wim vers install.swm (DISM 3800 Mo)...")
+            (usb_root / wim_rel_dir).mkdir(parents=True, exist_ok=True)
             proc = subprocess.run(
                 [
                     "dism",
                     "/Split-Image",
                     f"/ImageFile:{install_wim}",
-                    f"/SWMFile:{usb_root / 'sources' / 'install.swm'}",
+                    f"/SWMFile:{usb_root / wim_rel_dir / 'install.swm'}",
                     "/FileSize:3800",
                 ],
                 capture_output=True,
@@ -785,7 +834,17 @@ def execute_win_flash_direct(
 
         if driver_dir and os.path.isdir(os.path.realpath(driver_dir)):
             emit_progress(94, "drivers", "Injection du dossier de pilotes ($WinPEDriver$)...")
-            shutil.copytree(os.path.realpath(driver_dir), usb_root / "$WinPEDriver$", dirs_exist_ok=True)
+            dest_drv = usb_root / "$WinPEDriver$"
+            src_root = Path(os.path.realpath(driver_dir))
+            for root, dirs, files in os.walk(src_root, followlinks=False):
+                dirs[:] = [d for d in dirs if not (Path(root) / d).is_symlink()]
+                rel = Path(root).relative_to(src_root)
+                target_sub = dest_drv / rel
+                target_sub.mkdir(parents=True, exist_ok=True)
+                for fn in files:
+                    sf = Path(root) / fn
+                    if not sf.is_symlink() and sf.is_file():
+                        shutil.copy2(sf, target_sub / fn)
 
         emit_progress(100, "done", "Clé USB bootable créée avec succès !")
     finally:
@@ -812,6 +871,7 @@ def execute_win_ventoy(
     reserve_mb = int(job.get("reserve_mb") or 0)
     ventoy_cfg = job.get("ventoy_config") or {}
     add_isos = job.get("add_isos") or []
+    validate_paths_not_on_device(dev_info, *[str(p) for p in add_isos])
     remove_isos = job.get("remove_isos") or []
     new_persistences = job.get("create_persistence") or []
     unattend_profiles = job.get("unattend_profiles") or []
@@ -879,10 +939,11 @@ def execute_win_ventoy(
     vdir = vroot / "ventoy"
     vdir.mkdir(parents=True, exist_ok=True)
 
+    vroot_resolved = vroot.resolve()
     for rel in remove_isos:
         norm = normalize_ventoy_image_path(str(rel)).lstrip("/")
-        target_file = (vroot / norm).resolve()
-        if str(target_file).startswith(str(vroot.resolve())) and target_file.is_file():
+        target_file = (vroot_resolved / norm).resolve()
+        if target_file != vroot_resolved and target_file.is_relative_to(vroot_resolved) and target_file.is_file():
             emit_log("info", f"Suppression de {norm}...")
             target_file.unlink()
 
@@ -897,7 +958,9 @@ def execute_win_ventoy(
 
     emit_progress(45, "config", "Écriture de /ventoy/ventoy.json...")
     vjson_obj = build_ventoy_json(ventoy_cfg)
-    (vdir / "ventoy.json").write_text(json.dumps(vjson_obj, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    tmp_vj = vdir / ".ventoy.json.tmp"
+    tmp_vj.write_text(json.dumps(vjson_obj, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp_vj, vdir / "ventoy.json")
 
     if add_isos:
         total_iso_bytes = sum(os.path.getsize(os.path.realpath(p)) for p in add_isos if os.path.isfile(p))
@@ -962,29 +1025,67 @@ def execute_win_toolbox(
     elif action == "usb_badblocks":
         destructive = bool(job.get("destructive", False))
         emit_progress(5, "badblocks", f"Contrôle de surface ({'écriture/lecture' if destructive else 'lecture seule'})...")
-        total = min(dev_info.size_bytes, 64 * 1024**3)
+        total = (min(dev_info.size_bytes, 64 * 1024**3) // 512) * 512
         chunk = 4 * 1024 * 1024
         bad_count = 0
+
         if destructive:
             _run_diskpart([f"select disk {disk_num}", "clean", "exit"], emit_log)
-            emit_log("warn", "Vérification destructive des blocs...")
+            emit_log("warn", "Test destructif écriture+relecture (0xAA55) en cours sur la clé...")
+            pattern_block = b"\xAA\x55" * (chunk // 2)
+            # Write pass
+            def _pattern_gen():
+                class _PatStream:
+                    def __init__(self) -> None:
+                        self.rem = total
+                    def read(self, n: int) -> bytes:
+                        if self.rem <= 0:
+                            return b""
+                        take = min(n, self.rem)
+                        self.rem -= take
+                        return pattern_block[:take]
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, *a):
+                        return False
+                return _PatStream()
+
+            _write_raw_windows_disk(
+                disk_num,
+                0,
+                _pattern_gen,
+                total,
+                emit_progress,
+                "badblocks",
+                "Écriture motif test",
+                5.0,
+                45.0,
+            )
+
         done = 0
         with open(dev_info.path, "rb") as fin:
             while done < total:
+                to_read = min(chunk, total - done)
                 try:
-                    buf = fin.read(chunk)
+                    fin.seek(done)
+                    buf = fin.read(to_read)
                     if not buf:
                         break
+                    if destructive and buf != (b"\xAA\x55" * (len(buf) // 2))[:len(buf)]:
+                        bad_count += 1
                 except OSError:
                     bad_count += 1
-                done += chunk
+                done += to_read
                 if (done // chunk) % 8 == 0:
-                    emit_progress((done / max(total, 1)) * 98, "badblocks", f"Analyse : {done // (1024**2)} / {total // (1024**2)} Mo")
+                    base_p = 50.0 if destructive else 5.0
+                    span_p = 48.0 if destructive else 93.0
+                    emit_progress(base_p + (done / max(total, 1)) * span_p, "badblocks", f"Analyse : {done // (1024**2)} / {total // (1024**2)} Mo")
         emit("badblocks_result", bad_blocks=bad_count)
-        emit_progress(100, "done", f"Analyse terminée : {bad_count} secteur(s) illisible(s).")
+        emit_progress(100, "done", f"Analyse terminée : {bad_count} secteur(s) défectueux détecté(s).")
 
     elif action == "usb_backup_img":
         output_path = os.path.realpath(str(job["output_path"]))
+        validate_paths_not_on_device(dev_info, output_path)
         compress = bool(job.get("compress_gz", False))
         if not output_path.endswith((".img", ".img.gz")):
             output_path += ".img.gz" if compress else ".img"
@@ -1014,5 +1115,37 @@ def execute_win_toolbox(
                     )
                     last_emit = now
         emit_progress(100, "done", f"Sauvegarde image créée : {output_path}")
+
+    elif action == "usb_restore_img":
+        image_path = os.path.realpath(str(job["image_path"]))
+        if not os.path.isfile(image_path):
+            raise FileNotFoundError(f"Fichier image introuvable : {image_path}")
+        validate_paths_not_on_device(dev_info, image_path)
+        emit_progress(5, "wipe", f"Nettoyage de {dev_info.path} via diskpart...")
+        _run_diskpart([f"select disk {disk_num}", "clean", "exit"], emit_log)
+        total_size = os.path.getsize(image_path)
+        raw_fin, stream_obj, is_compressed = _open_windows_image_stream(image_path)
+        try:
+            _write_raw_windows_disk(
+                disk_num,
+                0,
+                lambda: stream_obj,
+                total_size,
+                emit_progress,
+                "restore",
+                "Restauration image",
+                10.0,
+                85.0,
+                max_bytes=dev_info.size_bytes,
+                raw_reader=raw_fin if is_compressed else None,
+            )
+        finally:
+            try:
+                if is_compressed:
+                    stream_obj.close()
+            finally:
+                raw_fin.close()
+        _run_diskpart(["rescan", "exit"], emit_log)
+        emit_progress(100, "done", "Image disque restaurée avec succès sur la clé USB !")
     else:
         raise ValueError(f"Action outil inconnue : {action}")

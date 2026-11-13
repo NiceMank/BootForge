@@ -179,7 +179,7 @@ def inspect_image(image_path: str) -> Dict[str, Any]:
     sevenzip = _find_7z_binary() if is_iso else None
     if is_iso and sevenzip:
         proc = subprocess.run(
-            [sevenzip, "l", "-slt", real_path],
+            [sevenzip, "l", "-slt", "--", real_path],
             capture_output=True,
             text=True,
             timeout=25,

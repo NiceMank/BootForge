@@ -1300,6 +1300,87 @@ STRINGS: Dict[str, Dict[str, str]] = {
         "fr": "Version",
         "en": "Version",
     },
+    # Auto-updater
+    "menu_updates": {
+        "fr": "Mises à jour...",
+        "en": "Check for Updates...",
+    },
+    "app_updates_tip": {
+        "fr": "Vérifier les mises à jour sécurisées sur GitHub",
+        "en": "Check for verified GitHub updates",
+    },
+    "update_title": {
+        "fr": "Mises à jour de BootForge",
+        "en": "BootForge Software Updates",
+    },
+    "update_current_ver": {
+        "fr": "Version installée : v{ver}",
+        "en": "Installed version: v{ver}",
+    },
+    "update_auto_chk": {
+        "fr": "Vérifier automatiquement au démarrage",
+        "en": "Check automatically at startup",
+    },
+    "update_btn_check": {
+        "fr": "Vérifier maintenant",
+        "en": "Check now",
+    },
+    "update_btn_install": {
+        "fr": "Télécharger et installer",
+        "en": "Download & Install",
+    },
+    "update_btn_skip": {
+        "fr": "Ignorer cette version",
+        "en": "Skip this version",
+    },
+    "update_btn_open_release": {
+        "fr": "Voir sur GitHub",
+        "en": "Open GitHub Release",
+    },
+    "update_btn_close": {
+        "fr": "Fermer",
+        "en": "Close",
+    },
+    "update_status_idle": {
+        "fr": "Prêt à interroger GitHub Releases (vérification Ed25519 + SHA-256).",
+        "en": "Ready to query GitHub Releases (Ed25519 + SHA-256 verification).",
+    },
+    "update_status_checking": {
+        "fr": "Vérification en cours via HTTPS (Ed25519)...",
+        "en": "Checking GitHub Releases over verified HTTPS...",
+    },
+    "update_status_up_to_date": {
+        "fr": "✅ BootForge est à jour (v{ver}).",
+        "en": "✅ BootForge is up to date (v{ver}).",
+    },
+    "update_status_available": {
+        "fr": "🆕 Mise à jour vérifiée disponible : v{ver} ({asset})",
+        "en": "🆕 Verified update available: v{ver} ({asset})",
+    },
+    "update_status_blocked": {
+        "fr": "🛡️ Installation automatique bloquée : {reason}",
+        "en": "🛡️ Automatic update blocked: {reason}",
+    },
+    "update_status_busy": {
+        "fr": "⏳ Opération USB active : installation différée jusqu'à la fin du travail.",
+        "en": "⏳ USB operation active: installation deferred until job finishes.",
+    },
+    "update_status_downloading": {
+        "fr": "Téléchargement sécurisé et contrôle SHA-256...",
+        "en": "Downloading and verifying SHA-256...",
+    },
+    "update_status_installed_deb": {
+        "fr": "✅ Paquet .deb installé. Redémarrez BootForge pour utiliser la nouvelle version.",
+        "en": "✅ .deb package installed. Restart BootForge to launch the new version.",
+    },
+    "update_status_extracted": {
+        "fr": "✅ Archive vérifiée extraite dans : {path}",
+        "en": "✅ Verified archive extracted to: {path}",
+    },
+    "update_status_win_launched": {
+        "fr": "🚀 Installateur Windows vérifié lancé. Fermeture de BootForge...",
+        "en": "🚀 Verified Windows installer launched. Closing BootForge...",
+    },
 }
 
 

@@ -34,6 +34,8 @@ def main() -> int:
         "--windowed",
         "--name",
         "BootForge",
+        "--hidden-import=engine.bootforge_engine",
+        "--hidden-import=engine.win_backend",
         f"--icon={icon_path}",
         f"--add-data={ROOT_DIR / 'assets'}{sep}assets",
         f"--add-data={ROOT_DIR / 'engine'}{sep}engine",

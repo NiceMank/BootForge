@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 from typing import Any, Callable, Dict, Optional
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QIcon
 from PyQt6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -16,6 +17,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QTabWidget,
@@ -24,10 +26,17 @@ from PyQt6.QtWidgets import (
 )
 
 from bootforge_ui import __version__
-from bootforge_win.theme import RESOURCE_ROOT, format_bytes
+from bootforge_win.theme import RESOURCE_ROOT, format_bytes, load_win_prefs, save_win_prefs
 from engine.disk_utils import check_system_dependencies
 from engine.i18n import get_current_language, t
 from engine.unattend_builder import build_autounattend_xml
+from engine.updater import (
+    UpdateCheckResult,
+    apply_downloaded_update,
+    check_for_update,
+    download_verified_update,
+    get_current_version,
+)
 
 
 class WinTweaksDialog(QDialog):
@@ -499,3 +508,195 @@ class AboutDialog(QDialog):
         btn_close = QPushButton(t("dialog_about_btn_close"))
         btn_close.clicked.connect(self.accept)
         root.addWidget(btn_close)
+
+
+class UpdatesWinDialog(QDialog):
+    """GitHub Releases cryptographic auto-updater dialog for Windows PyQt6 UI."""
+
+    _sig_checked = pyqtSignal(object)
+    _sig_progress = pyqtSignal(int)
+    _sig_install_done = pyqtSignal(bool, object, str)
+
+    def __init__(
+        self,
+        is_busy_fn: Callable[[], bool],
+        on_toast: Callable[[str], None],
+        initial_result: Optional[UpdateCheckResult] = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(t("update_title"))
+        self.setMinimumSize(560, 440)
+        self._is_busy = is_busy_fn
+        self._on_toast = on_toast
+        self._result: Optional[UpdateCheckResult] = initial_result
+        self._busy_net = False
+
+        self._sig_checked.connect(self._on_check_done)
+        self._sig_progress.connect(self._on_progress_val)
+        self._sig_install_done.connect(self._on_install_done)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(12)
+
+        card = QFrame()
+        card.setObjectName("Card")
+        c_lay = QVBoxLayout(card)
+        c_lay.setContentsMargins(12, 12, 12, 12)
+        c_lay.setSpacing(8)
+
+        self._lbl_ver = QLabel(t("update_current_ver", ver=get_current_version()))
+        self._lbl_ver.setObjectName("GroupTitle")
+        c_lay.addWidget(self._lbl_ver)
+
+        self._lbl_status = QLabel(t("update_status_idle"))
+        self._lbl_status.setWordWrap(True)
+        c_lay.addWidget(self._lbl_status)
+
+        prefs = load_win_prefs()
+        self._chk_auto = QCheckBox(t("update_auto_chk"))
+        self._chk_auto.setChecked(bool(prefs.get("auto_check_updates", True)))
+        self._chk_auto.toggled.connect(lambda v: save_win_prefs({"auto_check_updates": bool(v)}))
+        c_lay.addWidget(self._chk_auto)
+        root.addWidget(card)
+
+        self._progress = QProgressBar()
+        self._progress.setRange(0, 100)
+        self._progress.setVisible(False)
+        root.addWidget(self._progress)
+
+        self._txt_changelog = QPlainTextEdit()
+        self._txt_changelog.setObjectName("CodeView")
+        self._txt_changelog.setReadOnly(True)
+        root.addWidget(self._txt_changelog, 1)
+
+        btns = QHBoxLayout()
+        self._btn_check = QPushButton(t("update_btn_check"))
+        self._btn_check.clicked.connect(self._start_check)
+        btns.addWidget(self._btn_check)
+
+        self._btn_skip = QPushButton(t("update_btn_skip"))
+        self._btn_skip.setVisible(False)
+        self._btn_skip.clicked.connect(self._skip_version)
+        btns.addWidget(self._btn_skip)
+
+        btns.addStretch()
+
+        self._btn_install = QPushButton(t("update_btn_install"))
+        self._btn_install.setObjectName("PrimaryBtn")
+        self._btn_install.setEnabled(False)
+        self._btn_install.clicked.connect(self._start_install)
+        btns.addWidget(self._btn_install)
+
+        btn_close = QPushButton(t("update_btn_close"))
+        btn_close.clicked.connect(self.accept)
+        btns.addWidget(btn_close)
+        root.addLayout(btns)
+
+        if initial_result is not None:
+            self._apply_result(initial_result)
+
+    def _start_check(self) -> None:
+        if self._busy_net:
+            return
+        self._busy_net = True
+        self._btn_check.setEnabled(False)
+        self._btn_install.setEnabled(False)
+        self._lbl_status.setText(t("update_status_checking"))
+
+        import threading
+
+        def _worker() -> None:
+            res = check_for_update()
+            self._sig_checked.emit(res)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_check_done(self, res: UpdateCheckResult) -> None:
+        self._busy_net = False
+        self._btn_check.setEnabled(True)
+        self._apply_result(res)
+
+    def _apply_result(self, res: UpdateCheckResult) -> None:
+        self._result = res
+        self._txt_changelog.setPlainText(res.changelog or "")
+        if res.status == "up_to_date":
+            self._lbl_status.setText(t("update_status_up_to_date", ver=res.current_version))
+            self._btn_install.setEnabled(False)
+            self._btn_skip.setVisible(False)
+        elif res.status == "available" and res.verified:
+            self._btn_skip.setVisible(True)
+            if self._is_busy():
+                self._lbl_status.setText(t("update_status_busy"))
+                self._btn_install.setEnabled(False)
+            else:
+                self._lbl_status.setText(t("update_status_available", ver=res.latest_version, asset=res.asset_name))
+                self._btn_install.setEnabled(True)
+        else:
+            self._lbl_status.setText(t("update_status_blocked", reason=res.error_message or res.status))
+            self._btn_install.setEnabled(False)
+            self._btn_skip.setVisible(False)
+
+    def _skip_version(self) -> None:
+        if self._result and self._result.latest_version:
+            save_win_prefs({"skipped_version": self._result.latest_version})
+            self.accept()
+
+    def _on_progress_val(self, pct: int) -> None:
+        self._progress.setValue(pct)
+
+    def _start_install(self) -> None:
+        if not self._result or self._busy_net:
+            return
+        if self._is_busy():
+            self._lbl_status.setText(t("update_status_busy"))
+            return
+        res = self._result
+        self._busy_net = True
+        self._btn_install.setEnabled(False)
+        self._btn_check.setEnabled(False)
+        self._progress.setVisible(True)
+        self._progress.setValue(0)
+        self._lbl_status.setText(t("update_status_downloading"))
+
+        import threading
+
+        def _prog(received: int, total: int, _speed: float) -> None:
+            pct = int((received / total) * 100) if total > 0 else 0
+            self._sig_progress.emit(min(max(pct, 0), 100))
+
+        def _worker() -> None:
+            try:
+                asset_path = download_verified_update(res, progress_cb=_prog, is_busy_fn=self._is_busy)
+                outcome = apply_downloaded_update(asset_path, res, is_busy_fn=self._is_busy)
+                self._sig_install_done.emit(True, outcome, "")
+            except Exception as exc:
+                self._sig_install_done.emit(False, {}, str(exc))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_install_done(self, ok: bool, outcome: Dict[str, Any], err: str) -> None:
+        self._busy_net = False
+        self._btn_check.setEnabled(True)
+        if not ok:
+            self._lbl_status.setText(t("update_status_blocked", reason=err))
+            self._on_toast(err)
+            return
+        self._progress.setValue(100)
+        act = outcome.get("action")
+        if act == "launched_win_setup":
+            msg = t("update_status_win_launched")
+            self._lbl_status.setText(msg)
+            self._on_toast(msg)
+            app = QApplication.instance()
+            if app is not None:
+                app.quit()
+        elif act == "installed_deb":
+            msg = t("update_status_installed_deb")
+            self._lbl_status.setText(msg)
+            self._on_toast(msg)
+        else:
+            msg = t("update_status_extracted", path=outcome.get("path", ""))
+            self._lbl_status.setText(msg)
+            self._on_toast(msg)

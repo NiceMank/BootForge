@@ -244,6 +244,10 @@ class ToolboxWinView(QWidget):
         self._btn_backup = QPushButton(t("toolbox_backup_btn"))
         self._btn_backup.clicked.connect(self._run_backup)
         h_bk.addWidget(self._btn_backup)
+        self._btn_restore = QPushButton(t("toolbox_clone_btn_restore"))
+        self._btn_restore.setObjectName("DangerBtn")
+        self._btn_restore.clicked.connect(self._run_restore)
+        h_bk.addWidget(self._btn_restore)
         h_bk.addStretch()
         cbk_lay.addLayout(h_bk)
         self._scroll_layout.addWidget(self._card_backup)
@@ -286,6 +290,7 @@ class ToolboxWinView(QWidget):
         self._lbl_bk_title.setText(t("toolbox_backup_title"))
         self._lbl_bk_desc.setText(t("toolbox_backup_desc"))
         self._btn_backup.setText(t("toolbox_backup_btn"))
+        self._btn_restore.setText(t("toolbox_clone_btn_restore"))
         self._lbl_q_title.setText(t("toolbox_qemu_title"))
         self._lbl_q_desc.setText(t("toolbox_qemu_desc"))
         self._btn_qemu.setText(t("toolbox_qemu_btn"))
@@ -421,6 +426,33 @@ class ToolboxWinView(QWidget):
                 False,
             )
 
+    def _run_restore(self) -> None:
+        dev = self._get_device()
+        if not dev:
+            return
+        fn, _ = QFileDialog.getOpenFileName(
+            self,
+            t("toolbox_clone_restore_opt"),
+            "",
+            "Images disque (*.img *.img.gz *.img.xz);;Tous les fichiers (*.*)",
+        )
+        if not fn:
+            return
+        job = {
+            "action": "usb_restore_img",
+            "device": dev["path"],
+            "image_path": fn,
+        }
+        dlg = ConfirmDestroyDialog(
+            device=dev,
+            operation_title=t("toolbox_clone_restore_opt"),
+            detail_msg=f"{t('toolbox_clone_desc')} ({os.path.basename(fn)})",
+            on_confirmed=lambda: self._on_start_job(job, False),
+            simple_mode=self._simple_mode,
+            parent=self,
+        )
+        dlg.exec()
+
     def _run_qemu(self) -> None:
         dev = self._get_device()
         if not dev:
@@ -487,4 +519,5 @@ class ToolboxWinView(QWidget):
         self._btn_badblocks.setEnabled(dev_ok and not busy)
         self._btn_wipe.setEnabled(dev_ok and not busy)
         self._btn_backup.setEnabled(dev_ok and not busy)
+        self._btn_restore.setEnabled(dev_ok and not busy)
         self._btn_qemu.setEnabled(dev_ok and not busy)

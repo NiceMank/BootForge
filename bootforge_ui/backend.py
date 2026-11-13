@@ -10,9 +10,7 @@ import subprocess
 import sys
 import tempfile
 import threading
-import time
 import urllib.parse
-import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -22,6 +20,7 @@ gi.require_version("GLib", "2.0")
 from gi.repository import GLib
 
 from engine.catalog import OFFICIAL_CATALOG, default_downloads_dir
+from engine.net_security import CATALOG_INITIAL_HOSTS, download_https_atomic
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ENGINE_PATH = PROJECT_ROOT / "engine" / "bootforge_engine.py"
@@ -280,59 +279,42 @@ class ActiveProcessController:
             self._cancel_flag.clear()
 
         def _worker() -> None:
-            dest_path: Optional[Path] = None
             try:
-                url = item.get("url", "")
-                if not url.startswith("https://"):
-                    raise ValueError("URL HTTPS requise.")
-
+                url = str(item.get("url") or "")
                 parsed = urllib.parse.urlparse(url)
-                safe_name = os.path.basename(parsed.path) or f"{item.get('id', 'image')}.iso"
+                raw_name = os.path.basename(parsed.path) or f"{item.get('id', 'image')}.iso"
+                safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", raw_name).lstrip(".") or f"{item.get('id', 'image')}.iso"
                 target_dir = Path(dest_dir or str(default_downloads_dir())).resolve()
                 target_dir.mkdir(parents=True, exist_ok=True)
                 dest_path = target_dir / safe_name
 
-                req = urllib.request.Request(url, headers={"User-Agent": "BootForge/1.0"})
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    final_scheme = urllib.parse.urlparse(resp.geturl()).scheme
-                    if final_scheme not in ("https", "http"):
-                        raise RuntimeError("Protocole de redirection non autorisé.")
-                    total = int(resp.headers.get("Content-Length") or 0)
-                    received = 0
-                    t0 = time.monotonic()
-                    last_emit = t0
-                    with open(dest_path, "wb") as fout:
-                        while not self._cancel_flag.is_set():
-                            chunk = resp.read(256 * 1024)
-                            if not chunk:
-                                break
-                            fout.write(chunk)
-                            received += len(chunk)
-                            now = time.monotonic()
-                            if now - last_emit >= 0.25:
-                                elapsed = max(now - t0, 0.01)
-                                speed = received / elapsed
-                                pct = (received / total * 100.0) if total > 0 else 0.0
-                                GLib.idle_add(
-                                    on_telemetry,
-                                    {
-                                        "type": "progress",
-                                        "percent": round(pct, 1),
-                                        "stage": "download",
-                                        "speed_bps": speed,
-                                        "message": (
-                                            f"Téléchargement {safe_name} : {received / (1024**2):.1f} Mo"
-                                            + (f" / {total / (1024**2):.0f} Mo" if total else "")
-                                        ),
-                                    },
-                                )
-                                last_emit = now
+                def _on_progress(received: int, total: int, speed: float) -> None:
+                    pct = (received / total * 100.0) if total > 0 else 0.0
+                    GLib.idle_add(
+                        on_telemetry,
+                        {
+                            "type": "progress",
+                            "percent": round(pct, 1),
+                            "stage": "download",
+                            "speed_bps": speed,
+                            "message": (
+                                f"Téléchargement {safe_name} : {received / (1024**2):.1f} Mo"
+                                + (f" / {total / (1024**2):.0f} Mo" if total else "")
+                            ),
+                        },
+                    )
 
-                if self._cancel_flag.is_set():
-                    if dest_path:
-                        dest_path.unlink(missing_ok=True)
-                    GLib.idle_add(on_done, False, "Téléchargement annulé.")
-                    return
+                expected_sha = str(item.get("sha256") or "").strip().lower() or None
+                download_https_atomic(
+                    url,
+                    dest_path,
+                    allowed_hosts=CATALOG_INITIAL_HOSTS,
+                    allow_any_https_redirect=True,
+                    expected_sha256=expected_sha,
+                    timeout=45,
+                    cancel_check=self._cancel_flag.is_set,
+                    progress_cb=_on_progress,
+                )
 
                 GLib.idle_add(
                     on_telemetry,
@@ -340,8 +322,6 @@ class ActiveProcessController:
                 )
                 GLib.idle_add(on_done, True, str(dest_path))
             except Exception as exc:
-                if dest_path:
-                    dest_path.unlink(missing_ok=True)
                 GLib.idle_add(on_done, False, str(exc))
             finally:
                 with self._lock:

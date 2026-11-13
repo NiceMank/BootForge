@@ -159,8 +159,14 @@ def load_prefs() -> Dict[str, Any]:
 def save_prefs(prefs: Dict[str, Any]) -> None:
     path = _prefs_file()
     try:
+        cur = load_prefs()
+        if not isinstance(cur, dict):
+            cur = {}
+        cur.update(prefs)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(prefs, indent=2), encoding="utf-8")
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(cur, indent=2, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)
     except OSError:
         pass
 

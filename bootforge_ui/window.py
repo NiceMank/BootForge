@@ -31,7 +31,8 @@ from bootforge_ui.views_catalog import CatalogView
 from bootforge_ui.views_direct import DirectFlashView
 from bootforge_ui.views_toolbox import ToolboxView
 from bootforge_ui.views_ventoy import MultiBootView
-from bootforge_ui.widgets import PreflightDialog
+from bootforge_ui.widgets import PreflightDialog, UpdatesDialog
+from engine.updater import UpdateCheckResult, check_for_update
 
 
 class BootForgeWindow(Adw.ApplicationWindow):
@@ -52,6 +53,7 @@ class BootForgeWindow(Adw.ApplicationWindow):
         self._log_count = 0
         self._dropdown_updating = False
         self._mode_updating = False
+        self._latest_update_result: Optional[UpdateCheckResult] = None
 
         prefs = load_prefs()
         self._simple_mode = prefs.get("mode", "simple") != "advanced"
@@ -91,6 +93,7 @@ class BootForgeWindow(Adw.ApplicationWindow):
         self._app_menu.append(t("menu_preflight"), "win.preflight")
         self._app_menu.append(t("menu_logs"), "win.toggle-logs")
         self._app_menu.append(t("menu_lang"), "win.toggle-lang")
+        self._app_menu.append(t("menu_updates"), "win.updates")
         self._app_menu.append(t("menu_about"), "win.about")
 
         menu_btn = Gtk.MenuButton(
@@ -324,6 +327,8 @@ class BootForgeWindow(Adw.ApplicationWindow):
         # Initial load
         self.refresh_devices()
         self.refresh_deps()
+        if prefs.get("auto_check_updates", True) and os.environ.get("BOOTFORGE_NO_STARTUP_UPDATE") != "1":
+            GLib.timeout_add_seconds(3, self._schedule_startup_update_check)
         if initial_iso and os.path.isfile(initial_iso):
             self._view_direct.load_iso_external(initial_iso)
 
@@ -343,6 +348,10 @@ class BootForgeWindow(Adw.ApplicationWindow):
         act_lang = Gio.SimpleAction.new("toggle-lang", None)
         act_lang.connect("activate", lambda *_: self._toggle_language())
         self.add_action(act_lang)
+
+        act_updates = Gio.SimpleAction.new("updates", None)
+        act_updates.connect("activate", self._open_updates)
+        self.add_action(act_updates)
 
         act_about = Gio.SimpleAction.new("about", None)
         act_about.connect("activate", self._open_about)
@@ -377,6 +386,7 @@ class BootForgeWindow(Adw.ApplicationWindow):
         self._app_menu.append(t("menu_preflight"), "win.preflight")
         self._app_menu.append(t("menu_logs"), "win.toggle-logs")
         self._app_menu.append(t("menu_lang"), "win.toggle-lang")
+        self._app_menu.append(t("menu_updates"), "win.updates")
         self._app_menu.append(t("menu_about"), "win.about")
 
         if hasattr(self._view_direct, "apply_language"):
@@ -477,7 +487,23 @@ class BootForgeWindow(Adw.ApplicationWindow):
             comments=t("dialog_about_desc"),
         )
         dlg.present(self)
-        dlg.present(self)
+
+    def _schedule_startup_update_check(self) -> bool:
+        def _on_res(res: UpdateCheckResult) -> None:
+            self._latest_update_result = res
+            skipped = load_prefs().get("skipped_version", "")
+            if res.status == "available" and res.verified and res.latest_version != skipped:
+                self.show_toast(t("update_status_available", ver=res.latest_version, asset=res.asset_name))
+
+        run_async(check_for_update, _on_res, lambda _err: None)
+        return False
+
+    def _open_updates(self, *_args: Any) -> None:
+        UpdatesDialog(
+            is_busy_fn=self._proc.is_busy,
+            on_toast=self.show_toast,
+            initial_result=self._latest_update_result,
+        ).present(self)
 
     def refresh_devices(self) -> None:
         self._btn_refresh_dev.set_sensitive(False)

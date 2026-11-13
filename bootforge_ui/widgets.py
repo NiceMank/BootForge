@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import threading
 from typing import Any, Callable, Dict, List, Optional
 
 import cairo
@@ -11,14 +12,22 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 gi.require_version("Gdk", "4.0")
+gi.require_version("Gio", "2.0")
 gi.require_version("Pango", "1.0")
 gi.require_version("PangoCairo", "1.0")
 
-from gi.repository import Adw, Gdk, Gtk, Pango, PangoCairo
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango, PangoCairo
 
 from engine.i18n import get_current_language, t
 from engine.unattend_builder import build_autounattend_xml
-from bootforge_ui.theme import esc, format_bytes, make_icon_button
+from engine.updater import (
+    UpdateCheckResult,
+    apply_downloaded_update,
+    check_for_update,
+    download_verified_update,
+    get_current_version,
+)
+from bootforge_ui.theme import esc, format_bytes, load_prefs, make_icon_button, save_prefs
 
 
 COLOR_PALETTE = {
@@ -649,3 +658,185 @@ def present_confirm_destroy_dialog(
     toolbar.set_content(content)
     dialog.set_child(toolbar)
     dialog.present(parent)
+
+
+class UpdatesDialog(Adw.Dialog):
+    """GitHub Releases cryptographic auto-updater dialog (GTK4/Libadwaita)."""
+
+    def __init__(
+        self,
+        is_busy_fn: Callable[[], bool],
+        on_toast: Callable[[str], None],
+        initial_result: Optional[UpdateCheckResult] = None,
+    ) -> None:
+        super().__init__()
+        self.set_title(t("update_title"))
+        self.set_content_width(580)
+        self.set_content_height(500)
+
+        self._is_busy = is_busy_fn
+        self._on_toast = on_toast
+        self._result: Optional[UpdateCheckResult] = initial_result
+        self._busy_net = False
+
+        toolbar = Adw.ToolbarView()
+        hdr = Adw.HeaderBar()
+        self._btn_check = make_icon_button(t("update_btn_check"), "view-refresh-symbolic")
+        self._btn_check.connect("clicked", lambda *_: self._start_check())
+        hdr.pack_end(self._btn_check)
+        toolbar.add_top_bar(hdr)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        box.set_margin_top(14)
+        box.set_margin_bottom(16)
+        box.set_margin_start(16)
+        box.set_margin_end(16)
+
+        grp = Adw.PreferencesGroup()
+        self._row_ver = Adw.ActionRow(
+            use_markup=False,
+            title=t("update_current_ver", ver=get_current_version()),
+            subtitle=t("update_status_idle"),
+        )
+        grp.add(self._row_ver)
+
+        prefs = load_prefs()
+        self._sw_auto = Adw.SwitchRow(use_markup=False, title=t("update_auto_chk"))
+        self._sw_auto.set_active(bool(prefs.get("auto_check_updates", True)))
+        self._sw_auto.connect("notify::active", lambda s, *_: save_prefs({"auto_check_updates": s.get_active()}))
+        grp.add(self._sw_auto)
+        box.append(grp)
+
+        self._progress = Gtk.ProgressBar()
+        self._progress.set_visible(False)
+        box.append(self._progress)
+
+        sw = Gtk.ScrolledWindow()
+        sw.set_vexpand(True)
+        sw.set_min_content_height(180)
+        self._changelog_view = Gtk.TextView(editable=False, cursor_visible=False, wrap_mode=Gtk.WrapMode.WORD_CHAR)
+        self._changelog_view.add_css_class("bf-mono")
+        self._changelog_buf = self._changelog_view.get_buffer()
+        sw.set_child(self._changelog_view)
+        box.append(sw)
+
+        actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        actions.set_halign(Gtk.Align.END)
+
+        self._btn_skip = Gtk.Button(label=t("update_btn_skip"))
+        self._btn_skip.set_visible(False)
+        self._btn_skip.connect("clicked", self._on_skip_clicked)
+        actions.append(self._btn_skip)
+
+        self._btn_release_link = Gtk.Button(label=t("update_btn_open_release"))
+        self._btn_release_link.set_visible(False)
+        self._btn_release_link.connect("clicked", self._open_release_page)
+        actions.append(self._btn_release_link)
+
+        self._btn_install = Gtk.Button(label=t("update_btn_install"))
+        self._btn_install.add_css_class("suggested-action")
+        self._btn_install.set_sensitive(False)
+        self._btn_install.connect("clicked", self._start_install)
+        actions.append(self._btn_install)
+
+        box.append(actions)
+        toolbar.set_content(box)
+        self.set_child(toolbar)
+
+        if initial_result is not None:
+            self._apply_result(initial_result)
+
+    def _start_check(self) -> None:
+        if self._busy_net:
+            return
+        self._busy_net = True
+        self._btn_check.set_sensitive(False)
+        self._btn_install.set_sensitive(False)
+        self._row_ver.set_subtitle(t("update_status_checking"))
+
+        def _worker() -> None:
+            res = check_for_update()
+            GLib.idle_add(self._on_check_done, res)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_check_done(self, res: UpdateCheckResult) -> None:
+        self._busy_net = False
+        self._btn_check.set_sensitive(True)
+        self._apply_result(res)
+
+    def _apply_result(self, res: UpdateCheckResult) -> None:
+        self._result = res
+        self._changelog_buf.set_text(res.changelog or "")
+        self._btn_release_link.set_visible(bool(res.release_url))
+
+        if res.status == "up_to_date":
+            self._row_ver.set_subtitle(t("update_status_up_to_date", ver=res.current_version))
+            self._btn_install.set_sensitive(False)
+            self._btn_skip.set_visible(False)
+        elif res.status == "available" and res.verified:
+            self._row_ver.set_subtitle(t("update_status_available", ver=res.latest_version, asset=res.asset_name))
+            self._btn_skip.set_visible(True)
+            if self._is_busy():
+                self._row_ver.set_subtitle(t("update_status_busy"))
+                self._btn_install.set_sensitive(False)
+            else:
+                self._btn_install.set_sensitive(True)
+        else:
+            reason = res.error_message or res.status
+            self._row_ver.set_subtitle(t("update_status_blocked", reason=reason))
+            self._btn_install.set_sensitive(False)
+            self._btn_skip.set_visible(False)
+
+    def _on_skip_clicked(self, *_args: Any) -> None:
+        if self._result and self._result.latest_version:
+            save_prefs({"skipped_version": self._result.latest_version})
+            self.close()
+
+    def _open_release_page(self, *_args: Any) -> None:
+        if self._result and self._result.release_url:
+            Gio.AppInfo.launch_default_for_uri(self._result.release_url, None)
+
+    def _start_install(self, *_args: Any) -> None:
+        if not self._result or self._busy_net:
+            return
+        if self._is_busy():
+            self._row_ver.set_subtitle(t("update_status_busy"))
+            return
+        res = self._result
+        self._busy_net = True
+        self._btn_install.set_sensitive(False)
+        self._btn_check.set_sensitive(False)
+        self._progress.set_visible(True)
+        self._progress.set_fraction(0.0)
+        self._row_ver.set_subtitle(t("update_status_downloading"))
+
+        def _prog(received: int, total: int, _speed: float) -> None:
+            frac = min(max(received / total, 0.0), 1.0) if total > 0 else 0.0
+            GLib.idle_add(self._progress.set_fraction, frac)
+
+        def _worker() -> None:
+            try:
+                asset_path = download_verified_update(res, progress_cb=_prog, is_busy_fn=self._is_busy)
+                outcome = apply_downloaded_update(asset_path, res, is_busy_fn=self._is_busy)
+                GLib.idle_add(self._on_install_done, True, outcome, "")
+            except Exception as exc:
+                GLib.idle_add(self._on_install_done, False, {}, str(exc))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_install_done(self, ok: bool, outcome: Dict[str, Any], err: str) -> None:
+        self._busy_net = False
+        self._btn_check.set_sensitive(True)
+        if not ok:
+            self._row_ver.set_subtitle(t("update_status_blocked", reason=err))
+            self._on_toast(err)
+            return
+        self._progress.set_fraction(1.0)
+        act = outcome.get("action")
+        if act == "installed_deb":
+            msg = t("update_status_installed_deb")
+        else:
+            msg = t("update_status_extracted", path=outcome.get("path", ""))
+        self._row_ver.set_subtitle(msg)
+        self._on_toast(msg)

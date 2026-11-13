@@ -41,7 +41,9 @@ def save_win_prefs(prefs: Dict[str, Any]) -> None:
         cur = load_win_prefs()
         cur.update(prefs)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(cur, indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(cur, indent=2, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)
     except Exception:
         pass
 

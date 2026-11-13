@@ -8,14 +8,20 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
 import tempfile
-import urllib.request
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from engine.net_security import (
+    GITHUB_ALLOWED_HOSTS,
+    download_https_atomic,
+    fetch_https_bytes,
+)
 
 SAFE_ISO_RELPATH_RE = re.compile(r"^/[A-Za-z0-9._/ -]+$")
 SAFE_SCRIPT_NAME_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -78,17 +84,80 @@ def build_ventoy_windows_cli_args(
     return args
 
 
+def _parse_sha256_for_asset(sha_text: str, asset_name: str) -> Optional[str]:
+    """Extract exact SHA-256 hex digest matching asset_name from release checksum text."""
+    for line in sha_text.splitlines():
+        parts = line.strip().split()
+        if len(parts) >= 2:
+            token = parts[0].lower()
+            fname = os.path.basename(parts[-1].lstrip("*"))
+            if fname == asset_name and re.match(r"^[0-9a-f]{64}$", token):
+                return token
+        elif asset_name in line:
+            token = (parts[0].lower() if parts else "")
+            if re.match(r"^[0-9a-f]{64}$", token):
+                return token
+    return None
+
+
+def safe_extract_zip(zip_path: Path, dest_dir: Path) -> None:
+    """Safely extract zip entries preventing path traversal and symlink creation."""
+    base = dest_dir.resolve()
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        for member in zf.infolist():
+            mode = (member.external_attr >> 16) & 0o170000
+            if stat.S_ISLNK(mode):
+                raise ValueError(f"Lien symbolique interdit dans l'archive Ventoy : {member.filename}")
+            member_path = (base / member.filename).resolve()
+            if member_path != base and not member_path.is_relative_to(base):
+                raise ValueError(f"Chemin non sûr dans l'archive Ventoy : {member.filename}")
+        zf.extractall(base)
+
+
+def safe_extract_tar(tar_path: Path, dest_dir: Path) -> None:
+    """Safely extract tar.gz entries preventing traversal, symlinks, hardlinks, and device nodes."""
+    base = dest_dir.resolve()
+    with tarfile.open(tar_path, "r:gz") as tf:
+        for member in tf.getmembers():
+            if member.issym() or member.islnk() or member.ischr() or member.isblk() or member.isfifo() or member.isdev():
+                raise ValueError(f"Entrée non autorisée (lien/périphérique) dans Ventoy : {member.name}")
+            member_path = (base / member.name).resolve()
+            if member_path != base and not member_path.is_relative_to(base):
+                raise ValueError(f"Chemin non sûr dans l'archive Ventoy : {member.name}")
+        if sys.version_info >= (3, 12):
+            tf.extractall(base, filter="data")
+        else:
+            tf.extractall(base)
+
+
+def _fetch_required_ventoy_sha256(sha_asset: Optional[Dict[str, Any]], archive_name: str) -> str:
+    """Mandatory fail-closed SHA-256 retrieval for Ventoy official release archives."""
+    if not sha_asset or not sha_asset.get("browser_download_url"):
+        raise RuntimeError("Fichier SHA-256 absent de la release Ventoy : téléchargement refusé par sécurité.")
+    sha_bytes = fetch_https_bytes(
+        str(sha_asset["browser_download_url"]),
+        allowed_hosts=GITHUB_ALLOWED_HOSTS,
+        timeout=20,
+        max_bytes=1024 * 1024,
+    )
+    sha_text = sha_bytes.decode("utf-8", errors="ignore")
+    expected_sha256 = _parse_sha256_for_asset(sha_text, archive_name)
+    if not expected_sha256:
+        raise RuntimeError(f"Empreinte SHA-256 introuvable pour {archive_name} : téléchargement bloqué.")
+    return expected_sha256
+
+
 def download_and_extract_ventoy_windows(progress_cb=None) -> Path:
-    """Fetch latest Ventoy Windows release zip from GitHub, verify SHA-256, and extract safely."""
+    """Fetch latest Ventoy Windows release zip from GitHub, verify SHA-256 (fail-closed), and extract safely."""
     existing = find_cached_ventoy_windows_dir()
     if existing:
         return existing
 
     cache = get_ventoy_cache_dir()
     api_url = "https://api.github.com/repos/ventoy/Ventoy/releases/latest"
-    req = urllib.request.Request(api_url, headers={"User-Agent": "BootForge/1.0"})
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        release = json.loads(resp.read().decode("utf-8"))
+    release = json.loads(
+        fetch_https_bytes(api_url, allowed_hosts=GITHUB_ALLOWED_HOSTS, timeout=15).decode("utf-8")
+    )
 
     assets = release.get("assets", [])
     zip_asset = next((a for a in assets if str(a.get("name", "")).endswith("-windows.zip")), None)
@@ -97,50 +166,25 @@ def download_and_extract_ventoy_windows(progress_cb=None) -> Path:
     if not zip_asset:
         raise RuntimeError("Archive Ventoy Windows introuvable dans la release GitHub.")
 
-    zip_url = zip_asset["browser_download_url"]
-    zip_name = os.path.basename(zip_asset["name"])
+    zip_url = str(zip_asset["browser_download_url"])
+    zip_name = os.path.basename(str(zip_asset["name"]))
     zip_path = cache / zip_name
-    total_size = int(zip_asset.get("size") or 0)
+    expected_sha256 = _fetch_required_ventoy_sha256(sha_asset, zip_name)
 
-    expected_sha256: Optional[str] = None
-    if sha_asset:
-        try:
-            sha_req = urllib.request.Request(sha_asset["browser_download_url"], headers={"User-Agent": "BootForge/1.0"})
-            with urllib.request.urlopen(sha_req, timeout=15) as sresp:
-                sha_text = sresp.read().decode("utf-8", errors="ignore")
-            for line in sha_text.splitlines():
-                if zip_name in line:
-                    token = line.strip().split()[0].lower()
-                    if re.match(r"^[0-9a-f]{64}$", token):
-                        expected_sha256 = token
-                        break
-        except Exception:
-            expected_sha256 = None
+    download_https_atomic(
+        zip_url,
+        zip_path,
+        allowed_hosts=GITHUB_ALLOWED_HOSTS,
+        expected_sha256=expected_sha256,
+        timeout=60,
+        progress_cb=(
+            (lambda done, tot, _spd: progress_cb(int(done * 100 / max(tot, 1)), f"Téléchargement Ventoy Windows ({done // (1024*1024)} Mo)..."))
+            if progress_cb
+            else None
+        ),
+    )
 
-    dl_req = urllib.request.Request(zip_url, headers={"User-Agent": "BootForge/1.0"})
-    hasher = hashlib.sha256()
-    downloaded = 0
-    with urllib.request.urlopen(dl_req, timeout=60) as dresp, open(zip_path, "wb") as out:
-        while True:
-            chunk = dresp.read(256 * 1024)
-            if not chunk:
-                break
-            out.write(chunk)
-            hasher.update(chunk)
-            downloaded += len(chunk)
-            if progress_cb and total_size > 0:
-                progress_cb(int(downloaded * 100 / total_size), f"Téléchargement Ventoy Windows ({downloaded // (1024*1024)} Mo)...")
-
-    if expected_sha256 and hasher.hexdigest().lower() != expected_sha256:
-        zip_path.unlink(missing_ok=True)
-        raise ValueError("Échec de vérification SHA-256 de l'archive Ventoy Windows.")
-
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        for member in zf.infolist():
-            member_path = (cache / member.filename).resolve()
-            if not str(member_path).startswith(str(cache.resolve())):
-                raise ValueError(f"Chemin non sûr dans l'archive Ventoy : {member.filename}")
-        zf.extractall(cache)
+    safe_extract_zip(zip_path, cache)
 
     extracted = find_cached_ventoy_windows_dir()
     if not extracted:
@@ -149,16 +193,16 @@ def download_and_extract_ventoy_windows(progress_cb=None) -> Path:
 
 
 def download_and_extract_ventoy(progress_cb=None) -> Path:
-    """Fetch latest Ventoy Linux release tarball from GitHub, verify SHA-256 when available, and extract."""
+    """Fetch latest Ventoy Linux release tarball from GitHub, verify SHA-256 (fail-closed), and extract safely."""
     existing = find_cached_ventoy_dir()
     if existing:
         return existing
 
     cache = get_ventoy_cache_dir()
     api_url = "https://api.github.com/repos/ventoy/Ventoy/releases/latest"
-    req = urllib.request.Request(api_url, headers={"User-Agent": "BootForge/1.0"})
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        release = json.loads(resp.read().decode("utf-8"))
+    release = json.loads(
+        fetch_https_bytes(api_url, allowed_hosts=GITHUB_ALLOWED_HOSTS, timeout=15).decode("utf-8")
+    )
 
     assets = release.get("assets", [])
     tar_asset = next((a for a in assets if str(a.get("name", "")).endswith("-linux.tar.gz")), None)
@@ -167,51 +211,25 @@ def download_and_extract_ventoy(progress_cb=None) -> Path:
     if not tar_asset:
         raise RuntimeError("Archive Ventoy Linux introuvable dans la release GitHub.")
 
-    tar_url = tar_asset["browser_download_url"]
-    tar_name = os.path.basename(tar_asset["name"])
+    tar_url = str(tar_asset["browser_download_url"])
+    tar_name = os.path.basename(str(tar_asset["name"]))
     tar_path = cache / tar_name
-    total_size = int(tar_asset.get("size") or 0)
+    expected_sha256 = _fetch_required_ventoy_sha256(sha_asset, tar_name)
 
-    expected_sha256: Optional[str] = None
-    if sha_asset:
-        try:
-            sha_req = urllib.request.Request(sha_asset["browser_download_url"], headers={"User-Agent": "BootForge/1.0"})
-            with urllib.request.urlopen(sha_req, timeout=15) as sresp:
-                sha_text = sresp.read().decode("utf-8", errors="ignore")
-            for line in sha_text.splitlines():
-                if tar_name in line:
-                    token = line.strip().split()[0].lower()
-                    if re.match(r"^[0-9a-f]{64}$", token):
-                        expected_sha256 = token
-                        break
-        except Exception:
-            expected_sha256 = None
+    download_https_atomic(
+        tar_url,
+        tar_path,
+        allowed_hosts=GITHUB_ALLOWED_HOSTS,
+        expected_sha256=expected_sha256,
+        timeout=60,
+        progress_cb=(
+            (lambda done, tot, _spd: progress_cb(int(done * 100 / max(tot, 1)), f"Téléchargement Ventoy ({done // (1024*1024)} Mo)..."))
+            if progress_cb
+            else None
+        ),
+    )
 
-    dl_req = urllib.request.Request(tar_url, headers={"User-Agent": "BootForge/1.0"})
-    hasher = hashlib.sha256()
-    downloaded = 0
-    with urllib.request.urlopen(dl_req, timeout=60) as dresp, open(tar_path, "wb") as out:
-        while True:
-            chunk = dresp.read(256 * 1024)
-            if not chunk:
-                break
-            out.write(chunk)
-            hasher.update(chunk)
-            downloaded += len(chunk)
-            if progress_cb and total_size > 0:
-                progress_cb(int(downloaded * 100 / total_size), f"Téléchargement Ventoy ({downloaded // (1024*1024)} Mo)...")
-
-    if expected_sha256 and hasher.hexdigest().lower() != expected_sha256:
-        tar_path.unlink(missing_ok=True)
-        raise ValueError("Échec de vérification SHA-256 de l'archive Ventoy téléchargée.")
-
-    # Safe extraction preventing path traversal
-    with tarfile.open(tar_path, "r:gz") as tf:
-        for member in tf.getmembers():
-            member_path = (cache / member.name).resolve()
-            if not str(member_path).startswith(str(cache.resolve())):
-                raise ValueError(f"Chemin non sûr dans l'archive Ventoy : {member.name}")
-        tf.extractall(cache)
+    safe_extract_tar(tar_path, cache)
 
     extracted = find_cached_ventoy_dir()
     if not extracted:
@@ -395,5 +413,9 @@ def create_persistence_dat_image(
             conf_file.write_text("/ union\n", encoding="utf-8")
             os.sync()
         finally:
-            subprocess.run(["umount", tmp_mnt], check=False)
-            shutil.rmtree(tmp_mnt, ignore_errors=True)
+            um = subprocess.run(["umount", tmp_mnt], check=False)
+            if um.returncode == 0:
+                try:
+                    os.rmdir(tmp_mnt)
+                except OSError:
+                    pass

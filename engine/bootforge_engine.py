@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import json
 import lzma
 import os
@@ -18,7 +19,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -36,9 +36,11 @@ from engine.disk_utils import (
     list_block_devices,
     plan_partition_layout,
     sanitize_volume_label,
+    validate_paths_not_on_device,
     validate_target_device,
 )
 from engine.iso_inspector import compute_hashes, inspect_image
+from engine.net_security import GITHUB_ALLOWED_HOSTS, download_https_atomic
 from engine.unattend_builder import build_autounattend_xml
 from engine.ventoy_manager import (
     build_ventoy_json,
@@ -138,11 +140,111 @@ def wait_for_partition(part_path: str, timeout_s: float = 10.0) -> None:
     raise RuntimeError(f"Partition introuvable après partitionnement : {part_path}")
 
 
+UEFI_NTFS_URL = "https://raw.githubusercontent.com/pbatard/rufus/v4.6/res/uefi/uefi-ntfs.img"
+UEFI_NTFS_SHA256 = "72683fa1250eeea772d3399277b434d4e55ba8dd0dc926e52d817e701fc2eb9e"
+
+
+def _file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(1024 * 1024):
+            h.update(chunk)
+    return h.hexdigest().lower()
+
+
+def _safe_umount_cleanup(mnt_dir: str) -> None:
+    """Unmount cleanly and remove mount directory only if unmount succeeded (avoid rm -rf on mounted FS)."""
+    um = run_cmd(["umount", mnt_dir], check=False)
+    if um.returncode == 0:
+        try:
+            os.rmdir(mnt_dir)
+        except OSError:
+            pass
+
+
+def _copy_dir_no_symlinks(src_dir: str, dst_dir: Path) -> None:
+    """Recursively copy driver directory while skipping symlinks to avoid host file leakage."""
+    src_root = Path(os.path.realpath(src_dir))
+    for root, dirs, files in os.walk(src_root, followlinks=False):
+        dirs[:] = [d for d in dirs if not (Path(root) / d).is_symlink()]
+        rel = Path(root).relative_to(src_root)
+        target_sub = dst_dir / rel
+        target_sub.mkdir(parents=True, exist_ok=True)
+        for fn in files:
+            sf = Path(root) / fn
+            if sf.is_symlink() or not sf.is_file():
+                continue
+            shutil.copy2(sf, target_sub / fn)
+
+
+def _write_raw_stream_to_device(
+    image_path: str,
+    device_path: str,
+    dev_size_bytes: int,
+    stage: str = "dd",
+    action_label: str = "Écriture DD",
+) -> None:
+    """Stream raw, .gz, or .xz disk image to block device with accurate progress & fsync."""
+    lower_name = image_path.lower()
+    comp_size = max(os.path.getsize(image_path), 1)
+    t0 = time.monotonic()
+    last_emit = t0
+    written = 0
+    chunk_size = 4 * 1024 * 1024
+
+    with open(image_path, "rb") as raw_fin:
+        if lower_name.endswith(".gz"):
+            stream_ctx = gzip.GzipFile(fileobj=raw_fin, mode="rb")
+            compressed = True
+        elif lower_name.endswith(".xz"):
+            stream_ctx = lzma.open(raw_fin, mode="rb")
+            compressed = True
+        else:
+            stream_ctx = raw_fin
+            compressed = False
+
+        try:
+            with open(device_path, "wb") as fout:
+                while True:
+                    buf = stream_ctx.read(chunk_size)
+                    if not buf:
+                        break
+                    if written + len(buf) > dev_size_bytes:
+                        raise RuntimeError(
+                            f"L'image dépasse la capacité du périphérique cible ({dev_size_bytes} octets)."
+                        )
+                    fout.write(buf)
+                    written += len(buf)
+                    now = time.monotonic()
+                    if now - last_emit >= 0.3:
+                        elapsed = max(now - t0, 0.001)
+                        speed = written / elapsed
+                        if compressed:
+                            ratio = raw_fin.tell() / comp_size
+                            pct = 10 + min(85.0, max(0.0, ratio) * 85.0)
+                        else:
+                            pct = 10 + min(85.0, (written / comp_size) * 85.0)
+                        emit_progress(
+                            pct,
+                            stage,
+                            f"{action_label} : {written / (1024**2):.0f} Mo ({speed / (1024**2):.1f} Mo/s)",
+                            speed_bps=speed,
+                        )
+                        last_emit = now
+                fout.flush()
+                os.fsync(fout.fileno())
+        finally:
+            if compressed:
+                stream_ctx.close()
+
+
 def ensure_uefi_ntfs_image() -> Path:
-    """Locate bundled UEFI:NTFS FAT image or download to writable cache."""
+    """Locate bundled UEFI:NTFS FAT image or download with mandatory SHA-256 verification."""
     asset_path = PROJECT_ROOT / "assets" / "uefi-ntfs" / "uefi-ntfs.img"
     if asset_path.is_file() and asset_path.stat().st_size > 100000:
-        return asset_path
+        if _file_sha256(asset_path) == UEFI_NTFS_SHA256:
+            return asset_path
+        emit_log("warn", "Empreinte de assets/uefi-ntfs/uefi-ntfs.img invalide, récupération distante...")
 
     if sys.platform == "win32":
         cache_base = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local")) / "BootForge"
@@ -152,15 +254,18 @@ def ensure_uefi_ntfs_image() -> Path:
         cache_base = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "bootforge"
     cached_asset = cache_base / "uefi-ntfs" / "uefi-ntfs.img"
     if cached_asset.is_file() and cached_asset.stat().st_size > 100000:
-        return cached_asset
+        if _file_sha256(cached_asset) == UEFI_NTFS_SHA256:
+            return cached_asset
+        cached_asset.unlink(missing_ok=True)
 
-    cached_asset.parent.mkdir(parents=True, exist_ok=True)
-    url = "https://raw.githubusercontent.com/pbatard/rufus/master/res/uefi/uefi-ntfs.img"
-    emit_log("info", "Téléchargement de uefi-ntfs.img depuis le dépôt officiel Rufus...")
-    req = urllib.request.Request(url, headers={"User-Agent": "BootForge/1.0"})
-    with urllib.request.urlopen(req, timeout=30) as resp, open(cached_asset, "wb") as f:
-        shutil.copyfileobj(resp, f)
-    return cached_asset
+    emit_log("info", "Téléchargement vérifié de uefi-ntfs.img depuis le dépôt officiel Rufus...")
+    return download_https_atomic(
+        UEFI_NTFS_URL,
+        cached_asset,
+        allowed_hosts=GITHUB_ALLOWED_HOSTS,
+        expected_sha256=UEFI_NTFS_SHA256,
+        timeout=30,
+    )
 
 
 def copy_with_progress(src: Path, dst: Path, base_pct: float, span_pct: float, label: str) -> None:
@@ -258,6 +363,7 @@ def execute_flash_direct(job: Dict[str, Any], dry_run: bool = False) -> None:
         raise FileNotFoundError(f"Fichier image introuvable : {image_path}")
 
     dev_info = validate_target_device(device_path)
+    validate_paths_not_on_device(dev_info, image_path, driver_dir)
     img_info = inspect_image(image_path)
 
     emit_progress(2, "validate", f"Validation de {dev_info.path} ({dev_info.model})...")
@@ -283,41 +389,7 @@ def execute_flash_direct(job: Dict[str, Any], dry_run: bool = False) -> None:
         run_cmd(["wipefs", "-a", device_path])
         emit_progress(10, "dd", "Écriture bloc par bloc (mode DD) en cours...")
 
-        lower_name = image_path.lower()
-        total_size = os.path.getsize(image_path)
-        t0 = time.monotonic()
-        last_emit = t0
-        written = 0
-
-        if lower_name.endswith(".gz"):
-            opener = lambda p: gzip.open(p, "rb")
-        elif lower_name.endswith(".xz"):
-            opener = lambda p: lzma.open(p, "rb")
-        else:
-            opener = lambda p: open(p, "rb")
-
-        chunk_size = 4 * 1024 * 1024
-        with opener(image_path) as fin, open(device_path, "wb") as fout:
-            while True:
-                buf = fin.read(chunk_size)
-                if not buf:
-                    break
-                fout.write(buf)
-                written += len(buf)
-                now = time.monotonic()
-                if now - last_emit >= 0.3:
-                    elapsed = max(now - t0, 0.001)
-                    speed = written / elapsed
-                    pct = 10 + min(82.0, (written / max(total_size, 1)) * 82.0)
-                    emit_progress(
-                        pct,
-                        "dd",
-                        f"Écriture DD : {written / (1024**2):.0f} Mo ({speed / (1024**2):.1f} Mo/s)",
-                        speed_bps=speed,
-                    )
-                    last_emit = now
-            fout.flush()
-            os.fsync(fout.fileno())
+        _write_raw_stream_to_device(image_path, device_path, dev_info.size_bytes, stage="dd", action_label="Écriture DD")
 
         run_cmd(["partprobe", device_path], check=False)
         emit_progress(100, "done", "Image écrite en mode DD avec succès !")
@@ -399,8 +471,7 @@ def execute_flash_direct(job: Dict[str, Any], dry_run: bool = False) -> None:
                 (Path(tmp_pmnt) / "persistence.conf").write_text("/ union\n", encoding="utf-8")
                 os.sync()
             finally:
-                run_cmd(["umount", tmp_pmnt], check=False)
-                shutil.rmtree(tmp_pmnt, ignore_errors=True)
+                _safe_umount_cleanup(tmp_pmnt)
 
     if "uefi-ntfs" in part_map:
         uefi_img = ensure_uefi_ntfs_image()
@@ -426,7 +497,9 @@ def execute_flash_direct(job: Dict[str, Any], dry_run: bool = False) -> None:
         usb_root = Path(tmp_usb_mnt)
 
         # Handle FAT32 automatic WIM splitting if install.wim > 4 GiB and wimlib-imagex is installed
-        install_wim = iso_root / "sources" / "install.wim"
+        wim_candidates = (iso_root / "sources" / "install.wim", iso_root / "x64" / "sources" / "install.wim")
+        install_wim = next((p for p in wim_candidates if p.is_file()), wim_candidates[0])
+        wim_rel_dir = install_wim.parent.relative_to(iso_root)
         split_wim = False
         if (
             filesystem == "fat32"
@@ -435,10 +508,10 @@ def execute_flash_direct(job: Dict[str, Any], dry_run: bool = False) -> None:
         ):
             if shutil.which("wimlib-imagex"):
                 split_wim = True
-                emit_log("info", "Découpe de install.wim (>4 Go) en segments install.swm pour FAT32...")
+                emit_log("info", f"Découpe de {wim_rel_dir / 'install.wim'} (>4 Go) en segments install.swm pour FAT32...")
             else:
                 raise RuntimeError(
-                    "sources/install.wim dépasse 4 Go : choisissez NTFS (UEFI:NTFS) ou installez `wimtools`."
+                    f"{wim_rel_dir / 'install.wim'} dépasse 4 Go : choisissez NTFS (UEFI:NTFS) ou installez `wimtools`."
                 )
 
         if split_wim:
@@ -459,7 +532,8 @@ def execute_flash_direct(job: Dict[str, Any], dry_run: bool = False) -> None:
                 done_b += sz
                 emit_progress(25 + (done_b / max(total_b, 1)) * 35, "copying", f"Copie {sf.name}...")
             emit_progress(62, "wimsplit", "Découpe de install.wim vers install.swm (3.8 Go max)...")
-            run_cmd(["wimlib-imagex", "split", str(install_wim), str(usb_root / "sources" / "install.swm"), "3800"])
+            (usb_root / wim_rel_dir).mkdir(parents=True, exist_ok=True)
+            run_cmd(["wimlib-imagex", "split", str(install_wim), str(usb_root / wim_rel_dir / "install.swm"), "3800"])
         else:
             copy_tree_with_progress(iso_root, usb_root, 25.0, 65.0)
 
@@ -469,11 +543,11 @@ def execute_flash_direct(job: Dict[str, Any], dry_run: bool = False) -> None:
             xml_content = build_autounattend_xml(win_tweaks)
             (usb_root / "autounattend.xml").write_text(xml_content, encoding="utf-8")
 
-        # Inject Windows/Linux driver folder if requested
+        # Inject Windows/Linux driver folder if requested (skipping symlinks)
         if driver_dir and os.path.isdir(os.path.realpath(driver_dir)):
             emit_progress(94, "drivers", "Injection du dossier de pilotes ($WinPEDriver$)...")
             dest_drv = usb_root / "$WinPEDriver$"
-            shutil.copytree(os.path.realpath(driver_dir), dest_drv, dirs_exist_ok=True)
+            _copy_dir_no_symlinks(driver_dir, dest_drv)
 
         # Enable Linux persistence boot kernel flags if persistence partition created
         if "linux-persistence" in part_map and img_info["os_family"] == "linux":
@@ -482,10 +556,8 @@ def execute_flash_direct(job: Dict[str, Any], dry_run: bool = False) -> None:
         emit_progress(97, "sync", "Finalisation et synchronisation matérielle (fsync)...")
         os.sync()
     finally:
-        run_cmd(["umount", tmp_iso_mnt], check=False)
-        run_cmd(["umount", tmp_usb_mnt], check=False)
-        shutil.rmtree(tmp_iso_mnt, ignore_errors=True)
-        shutil.rmtree(tmp_usb_mnt, ignore_errors=True)
+        _safe_umount_cleanup(tmp_iso_mnt)
+        _safe_umount_cleanup(tmp_usb_mnt)
 
     emit_progress(100, "done", "Clé USB bootable créée avec succès !")
 
@@ -495,13 +567,14 @@ def execute_ventoy_operation(job: Dict[str, Any], dry_run: bool = False) -> None
     action = str(job["action"])  # ventoy_install | ventoy_update | ventoy_apply
     device_path = str(job["device"])
     dev_info = validate_target_device(device_path)
+    add_isos = job.get("add_isos") or []
+    validate_paths_not_on_device(dev_info, *[str(p) for p in add_isos])
 
     scheme = str(job.get("scheme") or "gpt").lower()
     secure_boot = bool(job.get("secure_boot", True))
     reserve_mb = int(job.get("reserve_mb") or 0)
     ventoy_label = sanitize_volume_label(str(job.get("volume_label") or "Ventoy"), "exfat")
     ventoy_cfg = job.get("ventoy_config") or {}
-    add_isos = job.get("add_isos") or []
     remove_isos = job.get("remove_isos") or []
     new_persistences = job.get("create_persistence") or []
     unattend_profiles = job.get("unattend_profiles") or []
@@ -582,10 +655,11 @@ def execute_ventoy_operation(job: Dict[str, Any], dry_run: bool = False) -> None
         vdir.mkdir(parents=True, exist_ok=True)
 
         # 1. Remove requested ISOs
+        vroot_resolved = vroot.resolve()
         for rel in remove_isos:
             norm = normalize_ventoy_image_path(str(rel)).lstrip("/")
-            target_file = (vroot / norm).resolve()
-            if str(target_file).startswith(str(vroot.resolve())) and target_file.is_file():
+            target_file = (vroot_resolved / norm).resolve()
+            if target_file != vroot_resolved and target_file.is_relative_to(vroot_resolved) and target_file.is_file():
                 emit_log("info", f"Suppression de {norm}...")
                 target_file.unlink()
 
@@ -619,10 +693,13 @@ def execute_ventoy_operation(job: Dict[str, Any], dry_run: bool = False) -> None
                 )
                 create_persistence_dat_image(str(pdir / fname), size_mb, label=plabel, with_persistence_conf=with_conf)
 
-        # 4. Write ventoy.json
+        # 4. Write ventoy.json atomically
         emit_progress(45, "config", "Écriture de /ventoy/ventoy.json...")
         vjson_obj = build_ventoy_json(ventoy_cfg)
-        (vdir / "ventoy.json").write_text(json.dumps(vjson_obj, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        vjson_txt = json.dumps(vjson_obj, indent=2, ensure_ascii=False) + "\n"
+        tmp_vj = vdir / ".ventoy.json.tmp"
+        tmp_vj.write_text(vjson_txt, encoding="utf-8")
+        os.replace(tmp_vj, vdir / "ventoy.json")
 
         # 5. Copy new ISOs onto the Ventoy partition
         if add_isos:
@@ -641,8 +718,7 @@ def execute_ventoy_operation(job: Dict[str, Any], dry_run: bool = False) -> None
         os.sync()
     finally:
         if not already_mounted:
-            run_cmd(["umount", tmp_mnt], check=False)
-            shutil.rmtree(tmp_mnt, ignore_errors=True)
+            _safe_umount_cleanup(tmp_mnt)
 
     emit_progress(100, "done", "Configuration Multi-Boot Ventoy terminée avec succès !")
 
@@ -711,6 +787,7 @@ def execute_toolbox_operation(job: Dict[str, Any], dry_run: bool = False) -> Non
 
     elif action == "usb_backup_img":
         output_path = os.path.realpath(str(job["output_path"]))
+        validate_paths_not_on_device(dev_info, output_path)
         compress = bool(job.get("compress_gz", False))
         if not output_path.endswith((".img", ".img.gz")):
             output_path += ".img.gz" if compress else ".img"
@@ -741,6 +818,25 @@ def execute_toolbox_operation(job: Dict[str, Any], dry_run: bool = False) -> Non
                     )
                     last_emit = now
         emit_progress(100, "done", f"Sauvegarde image créée : {output_path}")
+
+    elif action == "usb_restore_img":
+        image_path = os.path.realpath(str(job["image_path"]))
+        if not os.path.isfile(image_path):
+            raise FileNotFoundError(f"Fichier image introuvable : {image_path}")
+        validate_paths_not_on_device(dev_info, image_path)
+        unmount_device_partitions(device_path)
+        emit_progress(5, "wipe", f"Effacement des signatures sur {device_path}...")
+        run_cmd(["wipefs", "-a", device_path])
+        emit_progress(10, "restore", "Restauration de l'image disque vers la clé USB...")
+        _write_raw_stream_to_device(
+            image_path,
+            device_path,
+            dev_info.size_bytes,
+            stage="restore",
+            action_label="Restauration",
+        )
+        run_cmd(["partprobe", device_path], check=False)
+        emit_progress(100, "done", "Image disque restaurée avec succès sur la clé USB !")
 
     elif action == "usb_benchmark":
         emit_progress(10, "benchmark", f"Mesure du débit de lecture séquentielle sur {device_path}...")
@@ -794,7 +890,7 @@ def execute_job_file(job_path: str, dry_run: bool = False) -> None:
                 emit_log=emit_log,
                 copy_with_progress=copy_with_progress,
             )
-        elif action in ("usb_wipe_reset", "usb_badblocks", "usb_backup_img", "usb_benchmark"):
+        elif action in ("usb_wipe_reset", "usb_badblocks", "usb_backup_img", "usb_restore_img", "usb_benchmark"):
             execute_win_toolbox(
                 job,
                 dry_run=dry_run,
@@ -810,7 +906,7 @@ def execute_job_file(job_path: str, dry_run: bool = False) -> None:
         execute_flash_direct(job, dry_run=dry_run)
     elif action in ("ventoy_install", "ventoy_update", "ventoy_apply"):
         execute_ventoy_operation(job, dry_run=dry_run)
-    elif action in ("usb_wipe_reset", "usb_badblocks", "usb_backup_img", "usb_benchmark"):
+    elif action in ("usb_wipe_reset", "usb_badblocks", "usb_backup_img", "usb_restore_img", "usb_benchmark"):
         execute_toolbox_operation(job, dry_run=dry_run)
     else:
         raise ValueError(f"Action inconnue dans le job : {action}")

@@ -624,7 +624,9 @@ class DirectFlashWinView(QWidget):
             "volume_label": sanitize_volume_label(self._txt_label.text(), fs),
             "quick_format": True if self._simple_mode else self._chk_quick.isChecked(),
             "persistence_gb": float(self._spin_persist.value()) if (write_mode == "iso" and os_fam != "windows") else 0.0,
-            "persistence_type": "casper-rw",
+            "persistence_type": (self._iso_info or {}).get("persistence_type", "casper-rw")
+            if (self._iso_info or {}).get("persistence_type") in ("casper-rw", "persistence", "cow")
+            else "casper-rw",
             "driver_dir": "" if self._simple_mode else self._driver_dir,
             "windows_tweaks": self._win_tweaks if (write_mode == "iso" and os_fam == "windows") else {"enabled": False},
         }

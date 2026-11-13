@@ -17,8 +17,8 @@ sudo apt update && sudo apt install -y \
 # Lancer l'interface depuis le dépôt
 ./bootforge
 
-# Exécuter les tests unitaires
-python3 -m unittest discover -v
+# Exécuter les tests unitaires et de sécurité
+pytest -v
 
 # Construire le paquet .deb dans release/
 bash packaging/build_deb.sh

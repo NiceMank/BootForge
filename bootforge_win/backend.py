@@ -9,9 +9,7 @@ import subprocess
 import sys
 import tempfile
 import threading
-import time
 import urllib.parse
-import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -20,6 +18,7 @@ from PyQt6.QtCore import QObject, QThread, pyqtSignal
 from engine.catalog import default_downloads_dir
 from engine.disk_utils import check_system_dependencies, list_block_devices
 from engine.iso_inspector import compute_hashes
+from engine.net_security import CATALOG_INITIAL_HOSTS, download_https_atomic
 from engine.ventoy_manager import read_ventoy_partition_state
 
 
@@ -59,6 +58,11 @@ class AsyncHelper(QObject):
         t.finished_err.connect(on_err)
         t.finished.connect(_cleanup)
         t.start()
+
+    def wait_all(self, timeout_ms: int = 3000) -> None:
+        for t in list(self._threads):
+            if t.isRunning():
+                t.wait(timeout_ms)
 
 
 def read_ventoy_state_for_device(device: Dict[str, Any]) -> Dict[str, Any]:
@@ -308,65 +312,48 @@ class WinTaskController(QObject):
         self._set_busy(True)
 
         def _worker() -> None:
-            dest_path: Optional[Path] = None
             ok = False
             msg = ""
             try:
-                url = item.get("url", "")
-                if not url.startswith("https://"):
-                    raise ValueError("URL HTTPS requise.")
+                url = str(item.get("url") or "")
                 parsed = urllib.parse.urlparse(url)
-                safe_name = os.path.basename(parsed.path) or f"{item.get('id', 'image')}.iso"
+                raw_name = os.path.basename(parsed.path) or f"{item.get('id', 'image')}.iso"
+                safe_name = "".join(c if (c.isalnum() or c in "._-") else "_" for c in raw_name).lstrip(".") or f"{item.get('id', 'image')}.iso"
                 target_dir = Path(dest_dir or str(default_downloads_dir())).resolve()
                 target_dir.mkdir(parents=True, exist_ok=True)
                 dest_path = target_dir / safe_name
 
-                req = urllib.request.Request(url, headers={"User-Agent": "BootForge/1.0"})
-                with urllib.request.urlopen(req, timeout=30) as resp:
-                    if urllib.parse.urlparse(resp.geturl()).scheme not in ("https", "http"):
-                        raise RuntimeError("Redirection non autorisée.")
-                    total = int(resp.headers.get("Content-Length") or 0)
-                    received = 0
-                    t0 = time.monotonic()
-                    last_emit = t0
-                    with open(dest_path, "wb") as fout:
-                        while not self._cancel_flag.is_set():
-                            chunk = resp.read(256 * 1024)
-                            if not chunk:
-                                break
-                            fout.write(chunk)
-                            received += len(chunk)
-                            now = time.monotonic()
-                            if now - last_emit >= 0.25:
-                                elapsed = max(now - t0, 0.01)
-                                speed = received / elapsed
-                                pct = (received / total * 100.0) if total > 0 else 0.0
-                                self.telemetry.emit(
-                                    {
-                                        "type": "progress",
-                                        "percent": round(pct, 1),
-                                        "stage": "download",
-                                        "speed_bps": speed,
-                                        "message": f"Téléchargement {safe_name} : {received / (1024**2):.1f} Mo"
-                                        + (f" / {total / (1024**2):.0f} Mo" if total else ""),
-                                    }
-                                )
-                                last_emit = now
-
-                if self._cancel_flag.is_set():
-                    if dest_path:
-                        dest_path.unlink(missing_ok=True)
-                    ok = False
-                    msg = "Téléchargement annulé."
-                else:
+                def _on_progress(received: int, total: int, speed: float) -> None:
+                    pct = (received / total * 100.0) if total > 0 else 0.0
                     self.telemetry.emit(
-                        {"type": "progress", "percent": 100.0, "stage": "done", "message": f"Téléchargement terminé : {dest_path}"}
+                        {
+                            "type": "progress",
+                            "percent": round(pct, 1),
+                            "stage": "download",
+                            "speed_bps": speed,
+                            "message": f"Téléchargement {safe_name} : {received / (1024**2):.1f} Mo"
+                            + (f" / {total / (1024**2):.0f} Mo" if total else ""),
+                        }
                     )
-                    ok = True
-                    msg = str(dest_path)
+
+                expected_sha = str(item.get("sha256") or "").strip().lower() or None
+                download_https_atomic(
+                    url,
+                    dest_path,
+                    allowed_hosts=CATALOG_INITIAL_HOSTS,
+                    allow_any_https_redirect=True,
+                    expected_sha256=expected_sha,
+                    timeout=45,
+                    cancel_check=self._cancel_flag.is_set,
+                    progress_cb=_on_progress,
+                )
+
+                self.telemetry.emit(
+                    {"type": "progress", "percent": 100.0, "stage": "done", "message": f"Téléchargement terminé : {dest_path}"}
+                )
+                ok = True
+                msg = str(dest_path)
             except Exception as exc:
-                if dest_path:
-                    dest_path.unlink(missing_ok=True)
                 ok = False
                 msg = str(exc)
             finally:

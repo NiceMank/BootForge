@@ -30,8 +30,32 @@ CRITICAL_MOUNTPOINTS = {
     "/srv",
     "/tmp",
     "/root",
+    "/snap",
     "[SWAP]",
 }
+
+
+def is_critical_mountpoint(mp: str) -> bool:
+    """Return True if a mountpoint hosts core OS / system directories or subtrees."""
+    clean = (mp or "").strip()
+    if not clean:
+        return False
+    if clean in CRITICAL_MOUNTPOINTS:
+        return True
+    for prefix in ("/boot/", "/var/", "/usr/", "/etc/", "/opt/", "/srv/", "/snap/"):
+        if clean.startswith(prefix):
+            return True
+    return False
+
+
+def _collect_nested_children(node: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Recursively flatten children across partitions, LUKS/crypt, LVM, and MD nodes."""
+    found: List[Dict[str, Any]] = []
+    for child in node.get("children") or []:
+        if isinstance(child, dict):
+            found.append(child)
+            found.extend(_collect_nested_children(child))
+    return found
 
 
 class SafetyViolationError(ValueError):
@@ -173,13 +197,16 @@ def parse_lsblk_json(raw_json: str, collect_sysfs: bool = True) -> List[BlockDev
 
         # Check top-level mounts
         for mp in _flatten_mountpoints(dev):
-            if mp in CRITICAL_MOUNTPOINTS or mp.startswith("/boot"):
+            if is_critical_mountpoint(mp):
                 system_reasons.append(f"Point de montage système actif ({mp})")
 
         ventoy_detected = False
         part_labels: List[str] = []
 
-        for child in dev.get("children") or []:
+        direct_children = dev.get("children") or []
+        nested_children = _collect_nested_children(dev)
+
+        for child in direct_children:
             c_name = os.path.basename(str(child.get("kname") or child.get("name") or ""))
             c_path = str(child.get("path") or f"/dev/{c_name}")
             c_size = int(child.get("size") or 0)
@@ -190,7 +217,7 @@ def parse_lsblk_json(raw_json: str, collect_sysfs: bool = True) -> List[BlockDev
 
             part_labels.append(c_label.upper())
             for mp in c_mounts:
-                if mp in CRITICAL_MOUNTPOINTS or mp.startswith("/boot"):
+                if is_critical_mountpoint(mp):
                     system_reasons.append(f"Partition système active {c_name} ({mp})")
 
             partitions.append(
@@ -204,6 +231,16 @@ def parse_lsblk_json(raw_json: str, collect_sysfs: bool = True) -> List[BlockDev
                     mountpoints=c_mounts,
                 )
             )
+
+        # Also inspect deeper descendants (LUKS dm-crypt, LVM LVs, MD arrays) for OS mountpoints
+        direct_ids = {id(c) for c in direct_children}
+        for desc in nested_children:
+            if id(desc) in direct_ids:
+                continue
+            d_name = os.path.basename(str(desc.get("kname") or desc.get("name") or ""))
+            for mp in _flatten_mountpoints(desc):
+                if is_critical_mountpoint(mp):
+                    system_reasons.append(f"Conteneur système imbriqué {d_name} ({mp})")
 
         if "VTOYEFI" in part_labels:
             ventoy_detected = True
@@ -276,7 +313,17 @@ def validate_target_device(
         match, _disk_num = validate_windows_target(device_path, devices=devices)
         return match
 
-    if not isinstance(device_path, str) or not WHOLE_DISK_RE.match(device_path):
+    if not isinstance(device_path, str):
+        raise SafetyViolationError(
+            f"Chemin de périphérique invalide ou interdit (disque entier attendu) : {device_path!r}"
+        )
+
+    # Canonicalize existing device nodes & symlinks (prevents /dev/../dev/... tricks) while preserving mocked paths
+    if os.path.lexists(device_path):
+        resolved_path = os.path.realpath(device_path)
+    else:
+        resolved_path = os.path.normpath(device_path)
+    if not WHOLE_DISK_RE.match(resolved_path):
         raise SafetyViolationError(
             f"Chemin de périphérique invalide ou interdit (disque entier attendu) : {device_path!r}"
         )
@@ -296,30 +343,65 @@ def validate_target_device(
             timeout=5,
             check=True,
         )
-        devices = parse_lsblk_json(proc.stdout, collect_sysfs=False)
+        devices = parse_lsblk_json(proc.stdout, collect_sysfs=True)
 
-    match = next((d for d in devices if d.path == device_path), None)
+    match = next((d for d in devices if d.path == resolved_path), None)
     if match is None:
-        raise SafetyViolationError(f"Périphérique introuvable : {device_path}")
+        raise SafetyViolationError(f"Périphérique introuvable : {resolved_path}")
 
     if match.read_only:
-        raise SafetyViolationError(f"Le périphérique {device_path} est protégé en écriture (lecture seule).")
+        raise SafetyViolationError(f"Le périphérique {resolved_path} est protégé en écriture (lecture seule).")
 
-    # Hard block any disk holding critical OS mountpoints
+    # Hard block any disk holding critical OS mountpoints (at any partition/LUKS/LVM depth)
     for part in match.partitions:
         for mp in part.mountpoints:
-            if mp in CRITICAL_MOUNTPOINTS or mp.startswith("/boot"):
+            if is_critical_mountpoint(mp):
                 raise SafetyViolationError(
-                    f"BLOCAGE SÉCURITÉ : {device_path} héberge une partition système ({mp})."
+                    f"BLOCAGE SÉCURITÉ : {resolved_path} héberge une partition système ({mp})."
                 )
 
     is_usb_like = match.removable or match.hotplug or (allow_non_removable_usb and match.transport == "usb")
     if not is_usb_like:
         raise SafetyViolationError(
-            f"BLOCAGE SÉCURITÉ : {device_path} n'est pas identifié comme média USB amovible (tran={match.transport}, rm={match.removable})."
+            f"BLOCAGE SÉCURITÉ : {resolved_path} n'est pas identifié comme média USB amovible (tran={match.transport}, rm={match.removable})."
+        )
+
+    if match.is_system_disk:
+        reason_txt = "; ".join(match.system_reasons) or "disque protégé"
+        raise SafetyViolationError(
+            f"BLOCAGE SÉCURITÉ : {resolved_path} est protégé comme disque système ({reason_txt})."
         )
 
     return match
+
+
+def validate_paths_not_on_device(device: BlockDeviceInfo, *paths: Optional[str]) -> None:
+    """Reject if any input/output file or directory resides on a mounted partition of target device."""
+    mount_roots: List[Path] = []
+    for part in device.partitions:
+        for mp in part.mountpoints:
+            clean = (mp or "").strip()
+            if clean and clean != "[SWAP]":
+                try:
+                    mount_roots.append(Path(clean).resolve())
+                except OSError:
+                    continue
+
+    if not mount_roots:
+        return
+
+    for raw_p in paths:
+        if not raw_p or not str(raw_p).strip():
+            continue
+        try:
+            candidate = Path(str(raw_p)).resolve()
+        except OSError:
+            continue
+        for mroot in mount_roots:
+            if candidate == mroot or candidate.is_relative_to(mroot):
+                raise SafetyViolationError(
+                    f"BLOCAGE SÉCURITÉ : le chemin {raw_p} se trouve sur le périphérique cible {device.path} ({mroot})."
+                )
 
 
 def sanitize_volume_label(label: str, fstype: str) -> str:
