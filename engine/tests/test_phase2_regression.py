@@ -341,7 +341,8 @@ class Phase2RegressionTests(unittest.TestCase):
             rc = sign_release.main(["--keygen", "--private-out", str(priv_file)])
             self.assertEqual(rc, 0)
             self.assertTrue(priv_file.is_file())
-            self.assertEqual(stat.S_IMODE(priv_file.stat().st_mode), 0o600)
+            if sys.platform != "win32":
+                self.assertEqual(stat.S_IMODE(priv_file.stat().st_mode), 0o600)
             self.assertEqual(len(base64.b64decode(priv_file.read_text().strip())), 32)
 
             # --require-signature fails if signing key missing

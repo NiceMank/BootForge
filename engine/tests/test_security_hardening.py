@@ -303,6 +303,7 @@ class SecurityHardeningTests(unittest.TestCase):
             img.write_bytes(b"IMG" * 1024)
             events: list[dict] = []
             with (
+                mock.patch("sys.platform", "linux"),
                 mock.patch("engine.bootforge_engine.validate_target_device", return_value=fake_usb),
                 mock.patch("engine.bootforge_engine.emit", side_effect=lambda et, **kw: events.append({"type": et, **kw})),
             ):

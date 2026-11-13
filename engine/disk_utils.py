@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -318,11 +319,11 @@ def validate_target_device(
             f"Chemin de périphérique invalide ou interdit (disque entier attendu) : {device_path!r}"
         )
 
-    # Canonicalize existing device nodes & symlinks (prevents /dev/../dev/... tricks) while preserving mocked paths
-    if os.path.lexists(device_path):
+    # Canonicalize existing Linux device nodes & symlinks while keeping POSIX normalization for mocked /dev paths on Windows
+    if sys.platform != "win32" and os.path.lexists(device_path):
         resolved_path = os.path.realpath(device_path)
     else:
-        resolved_path = os.path.normpath(device_path)
+        resolved_path = posixpath.normpath(device_path)
     if not WHOLE_DISK_RE.match(resolved_path):
         raise SafetyViolationError(
             f"Chemin de périphérique invalide ou interdit (disque entier attendu) : {device_path!r}"
