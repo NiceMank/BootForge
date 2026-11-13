@@ -102,28 +102,34 @@ Tous les contrôles ci-dessous ont été menés **en lecture seule** en conserva
 
 ## 5. Compatibilité Windows (Simulé vs Réel)
 
+Les tests unitaires et la chaîne UI/packaging ont été validés à la fois en local (mocks Linux) **et sur un véritable runner Windows (`windows-latest`) via GitHub Actions** ([run `43467152645`](https://github.com/NiceMank/BootForge/actions/runs/43467152645), commit `b2789b7`) :
+
 | Composant | Statut de validation | Nature de la preuve |
 |-----------|----------------------|---------------------|
-| **PyQt6 UI** (`bootforge_win/window.py`) | Validé en rendu offscreen Linux | `QT_QPA_PLATFORM=offscreen BOOTFORGE_NO_STARTUP_UPDATE=1` : instanciation, `show()`, `processEvents()`, `close()` réussis sur Linux (`PYQT6_P2_SMOKE_OK`). **Non exécuté sur un OS Windows réel localement.** |
-| **Backend disque, PowerShell, `diskpart`, `WriteFile`/ioctl** (`engine/win_backend.py`) | Validé uniquement par tests unitaires simulés (mocks) | `test_win_backend.py` + `test_phase2_regression.py` valident l'inventaire WMI/PS, les scripts `diskpart`, la protection système, le verrouillage/fermeture de handles, le blocage `max_bytes`, la vérification de motifs `0xAA55`, et l'isolation `$env:BF_ISO_PATH`. **Non exécuté contre un véritable noyau Windows (`PhysicalDriveN` / `diskpart.exe` / `dism.exe`).** |
-| **Updater Windows** (`windows_setup`, `windows_portable`) | Validé en simulation Linux | Décompression ZIP portable réelle testée ; `windows_setup` validé avec mock `runner` vérifiant le drapeau NSIS `/S` et revérification SHA-256 anti-TOCTOU. L'appel `ShellExecuteW(..., "runas", ...)` n'est pas exécutable sous Linux. |
-| **PyInstaller & NSIS** (`packaging/build_windows.py`, `packaging/win_installer.nsi`) | Audités et vérifiés statiquement | Tous les fichiers référencés (`assets/icon.ico`, `LICENSE`, `README.md`, `packaging/win_main.py`, `requirements-win.txt`) existent ; `__version__ = "1.0.1"` cohérent dans `bootforge_ui` et `bootforge_win`; `--hidden-import=engine.bootforge_engine` et `engine.win_backend` ajoutés ; `makensis` (`v3.12-1`) et `pyinstaller` identifiés ; workflow `.github/workflows/ci-release.yml` (`build-windows` sur `windows-latest`) valide YAML. **La compilation `.exe` réelle dépend du runner CI `windows-latest` sur GitHub Actions.** |
+| **PyQt6 UI** (`bootforge_win/window.py`, `bootforge_win/backend.py`) | Validé sur Linux (offscreen) **et sur réel `windows-latest`** | `QT_QPA_PLATFORM=offscreen BOOTFORGE_NO_STARTUP_UPDATE=1` : l'exécution CI réelle sur `windows-latest` a mis en évidence puis permis de corriger un crash `QThread: Destroyed while thread '' is still running` lors de l'arrêt avant fin de `Get-Disk` (`AsyncHelper.wait_all(25000)` + hook `atexit`). Validé ensuite en CI réelle `windows-latest`. |
+| **Normalisation chemins & tests multiplateformes** (`engine/disk_utils.py`, tests) | Validé sur Linux (`46 passed`) **et réel `windows-latest` (`43 passed, 3 skipped`)** | Correction de `validate_target_device` (`posixpath.normpath` + garde `sys.platform != "win32"`), isolation `sys.platform="linux"` sur `test_usb_restore_img_dry_run_linux_and_windows`, et garde POSIX `0o600` sur NTFS. Les 3 tests ignorés sous Windows correspondent uniquement aux tests GTK/`bootforge_ui` Linux (`test_cli_dry_run_safety_lock_on_system_disk`, `test_markup_escape_and_formatting`, `test_prefs_persistence_defaults_to_simple`). |
+| **Backend disque, PowerShell, `diskpart`, `WriteFile`/ioctl** (`engine/win_backend.py`) | Validé par tests unitaires simulés sous Linux **et** sous réel `windows-latest` (`43 passed`) | `test_win_backend.py` + `test_phase2_regression.py` valident l'inventaire WMI/PS, les scripts `diskpart`, la protection système, le verrouillage/fermeture de handles, le blocage `max_bytes`, la vérification de motifs `0xAA55`, et l'isolation `$env:BF_ISO_PATH`. Le flash destructif sur un `PhysicalDriveN` physique sous Windows n'a pas été exécuté sans périphérique USB dédié Windows. |
+| **Updater Windows** (`windows_setup`, `windows_portable`) | Validé sous Linux et `windows-latest` | Décompression ZIP portable réelle testée ; `windows_setup` validé avec mock `runner` vérifiant le drapeau NSIS `/S` et revérification SHA-256 anti-TOCTOU. L'appel UAC interactif `ShellExecuteW(..., "runas", ...)` n'a pas été déclenché manuellement. |
+| **PyInstaller & NSIS** (`packaging/build_windows.py`, `packaging/win_installer.nsi`) | **Compilés et validés sur réel `windows-latest`** | Run `43467152645` (`Build Windows` en `1m54s`) : génération réelle de `BootForge-1.0.1-win64-portable.zip` (`37 985 637` octets) et compilation NSIS réelle de `BootForge-1.0.1-win64-setup.exe` (`27 131 538` octets), artefact `bootforge-windows-packages` (`64 935 890` octets). |
 
 ---
 
 ## 6. Préparation des 4 artefacts & CI/CD
 
-### Vérification réelle sur Linux
-1. **`bootforge_1.0.1_all.deb`** (reconstruit via `bash packaging/build_deb.sh` : `1 475 116` octets, `Installed-Size: 2744`) :
-   - `dpkg-deb --info` & `dpkg-deb -c` : **83 entrées**, aucune trace `__pycache__`/`.pyc`, présence de la règle PolicyKit, dépendances système (`python3-gi`, `gir1.2-gtk-4.0`, `gir1.2-adw-1`, `parted`, `gdisk`, `dosfstools`, `ntfs-3g`, `exfatprogs`, `e2fsprogs`, `7zip | p7zip-full`, `util-linux`, `udisks2`).
-   - `desktop-file-validate data/io.github.nicemank.BootForge.desktop` : **exit `0`**.
-   - Smoke test GTK4/Libadwaita sous `xvfb-run` : **`GTK4_P2_SMOKE_RC: 0`**.
-2. **`BootForge-1.0.1-linux.tar.gz`** (`1 517 454` octets, **46 entrées**) :
+### Vérification réelle sur Linux & Windows (local + GitHub Actions `43467152645`)
+1. **`bootforge_1.0.1_all.deb`** (`1 475 116` octets local / `1.5M` CI `ubuntu-latest`) :
+   - `dpkg-deb --info` & `dpkg-deb -c` : **83 entrées**, aucune trace `__pycache__`/`.pyc`, présence de la règle PolicyKit, dépendances système complètes.
+   - `desktop-file-validate data/io.github.nicemank.BootForge.desktop` : **exit `0`** (local + CI).
+   - Smoke test GTK4/Libadwaita sous `xvfb-run` : **`exit 0`** (local + CI `43467152645`, corrigé en CI en utilisant le Python système Ubuntu aligné avec `python3-gi`).
+2. **`BootForge-1.0.1-linux.tar.gz`** (`1 517 454` octets local / `1.5M` CI `ubuntu-latest`, **46 entrées**) :
    - Décompressé en dossier temporaire isolé (`tarfile(..., filter="data")`) : présence du lanceur `bootforge`, exécution réussie de `python3 -m engine.bootforge_engine deps` (`6` dépendances vérifiées).
+   - Artefact CI `bootforge-linux-packages` (`3 022 349` octets) publié en job `build-linux` (`31s`).
+3. **`BootForge-1.0.1-win64-portable.zip`** (`37 985 637` octets, généré sur réel `windows-latest` dans le run `43467152645`).
+4. **`BootForge-1.0.1-win64-setup.exe`** (`27 131 538` octets, compilé par `makensis packaging\win_installer.nsi` sur réel `windows-latest` dans le run `43467152645`).
    *(Remarque workspace : `release/` local contient encore deux anciens artefacts `1.0.0` non suivis par Git de la session initiale ; en CI, le dossier `release/` part d'un environnement vierge).*
 
-### Vérification simulée des 4 artefacts & du pipeline de signature CI/CD
-- Validation YAML de `.github/workflows/ci-release.yml` : 3 jobs détectés (`build-linux`, `build-windows`, `publish-release`).
+### Vérification du pipeline de signature CI/CD (`publish-release`)
+- Validation YAML de `.github/workflows/ci-release.yml` : 3 jobs (`build-linux`, `build-windows`, `publish-release`). Sur la branche `main` (commit `b2789b7`, run `43467152645`), `build-linux` et `build-windows` ont réussi ; `publish-release` a été ignoré comme prévu (`if: startsWith(github.ref, 'refs/tags/v')`).
 - Simulation complète du pipeline `sign_release.py --require-signature` dans un dossier temporaire contenant les 2 artefacts Linux réels renommés en `1.2.0` et 2 artefacts Windows synthétiques (`BootForge-1.2.0-win64-setup.exe`, `BootForge-1.2.0-win64-portable.zip`) avec une paire Ed25519 éphémère en mémoire :
   - Génération réussie de `BOOTFORGE_MANIFEST.json` (4 canaux : `linux_deb`, `linux_tar`, `windows_portable`, `windows_setup`) et `BOOTFORGE_MANIFEST.json.sig`.
   - Vérification positive via `updater.check_for_update` sur chacun des **4 canaux** avec la clé de test, et rejet `invalid_signature` par la clé publique de production réelle (`bootforge-release-2026`) ainsi que rejet `unprovisioned_key` lorsque `trusted_keys` est vide.
@@ -133,6 +139,5 @@ Tous les contrôles ci-dessous ont été menés **en lecture seule** en conserva
 ## 7. Risques résiduels
 
 1. **Secret GitHub `BOOTFORGE_SIGNING_KEY` à renseigner avant publication** : la clé publique est intégrée dans `engine/updater.py`, mais tant que `BOOTFORGE_SIGNING_KEY` n'est pas configuré dans les secrets du dépôt GitHub, le job `publish-release` bloquera sur `--require-signature`.
-2. **Exécution Windows réelle non testée localement** : `bootforge_win`, `win_backend.py` (`diskpart`, `dism`, WMI, `DeviceIoControl`/`WriteFile`, `ShellExecuteW`), `build_windows.py` et `win_installer.nsi` doivent impérativement être validés par l'exécution réelle du job `build-windows` sur `windows-latest` (et un essai sur machine Windows avec clé physique).
-3. **Opérations Linux destructives avec `pkexec`** : l'écriture réelle (`parted`, `mkfs.*`, `dd`, `wimlib-imagex`, `Ventoy2Disk.sh`, `fsck.vfat -n`) n'a pas été exécutée sur `/dev/sdb` afin de préserver intégralement la clé `KALI LINUX` ; ces chemins restent couverts par `--dry-run`, tests unitaires et contrôle statique.
-4. **Anciens fichiers `1.0.0` dans `release/` local** : penser à nettoyer `release/*1.0.0*` localement si ce répertoire est utilisé manuellement pour des tests de packaging.
+2. **Opérations destructives sur matériel réel Windows & Linux** : sur Windows, la compilation PyInstaller/NSIS, PyQt6 et les tests unitaires ont été validés sur réel `windows-latest`, mais l'écriture disque physique réelle (`diskpart`, `dism`, `DeviceIoControl`/`WriteFile`, UAC `ShellExecuteW`) reste à tester sur une machine Windows munie d'une clé USB sacrifiable. Sur Linux, l'écriture réelle (`parted`, `mkfs.*`, `dd`, `wimlib-imagex`, `Ventoy2Disk.sh`, `fsck.vfat -n`) n'a pas été exécutée sur `/dev/sdb` afin de préserver intégralement la clé `KALI LINUX`.
+3. **Anciens fichiers `1.0.0` dans `release/` local** : penser à nettoyer `release/*1.0.0*` localement si ce répertoire est utilisé manuellement pour des tests de packaging.
