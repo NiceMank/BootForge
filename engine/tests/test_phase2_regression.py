@@ -589,7 +589,7 @@ class Phase2RegressionTests(unittest.TestCase):
                 mock.patch("engine.bootforge_engine.wait_for_partition"),
                 mock.patch("engine.bootforge_engine.ensure_uefi_ntfs_image", return_value=uefi_img),
                 mock.patch("engine.bootforge_engine.copy_tree_with_progress"),
-                mock.patch("engine.bootforge_engine.os.sync"),
+                mock.patch("engine.bootforge_engine.os.sync", create=True),
             ):
                 bootforge_engine.execute_flash_direct(
                     {

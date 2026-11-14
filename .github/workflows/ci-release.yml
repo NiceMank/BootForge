@@ -70,15 +70,24 @@ jobs:
           python -m pip install -r requirements-win.txt pytest cryptography
 
       - name: Run Windows test suite & PyQt6 smoke test
+        shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
           pytest -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:BOOTFORGE_NO_STARTUP_UPDATE = "1"
           $env:QT_QPA_PLATFORM = "offscreen"
           python -c "from PyQt6.QtWidgets import QApplication; from bootforge_win.window import BootForgeMainWindow; app = QApplication([]); w = BootForgeMainWindow(); w.close(); app.processEvents()"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build Windows binary and portable ZIP
+        shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
           python packaging/build_windows.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Setup NSIS
         shell: pwsh
@@ -95,8 +104,12 @@ jobs:
       - name: Compile NSIS Installer (.exe)
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
           $ver = python -c "import sys; sys.path.insert(0, '.'); from bootforge_ui import __version__; print(__version__)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & makensis "-DVERSION=$ver" packaging\win_installer.nsi
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem -Path release
 
       - name: Upload Windows packages
