@@ -294,3 +294,185 @@ class UpdaterTests(unittest.TestCase):
             res_wz = updater.apply_downloaded_update(zip_file, upd_winzip)
             self.assertEqual(res_wz["action"], "extracted_portable")
             self.assertEqual((Path(res_wz["path"]) / "BootForge" / "BootForge.exe").read_text(), "MZ")
+
+    def test_phase4_attack_and_interruption_scenarios(self) -> None:
+        self.assertTrue(updater.is_release_key_provisioned())
+        priv, priv_raw, pub = _gen_keypair()
+        keys = {"bootforge-release-2026": pub.hex()}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            dist = Path(tmp) / "dist"
+            dist.mkdir()
+            deb_file = dist / "bootforge_1.2.0_all.deb"
+            deb_file.write_bytes(b"LEGIT-DEB-120")
+            sign_release.main(
+                [
+                    "--dist-dir",
+                    str(dist),
+                    "--tag",
+                    "v1.2.0",
+                    "--signing-key",
+                    base64.b64encode(priv_raw).decode("ascii"),
+                ]
+            )
+            m_bytes = (dist / "BOOTFORGE_MANIFEST.json").read_bytes()
+            sig_bytes = (dist / "BOOTFORGE_MANIFEST.json.sig").read_bytes()
+
+            rel_json = json.dumps(
+                {
+                    "tag_name": "v1.2.0",
+                    "html_url": "https://github.com/NiceMank/BootForge/releases/tag/v1.2.0",
+                    "body": "v1.2.0",
+                    "published_at": "2026-11-14T20:00:00Z",
+                    "assets": [
+                        {
+                            "name": "BOOTFORGE_MANIFEST.json",
+                            "browser_download_url": "https://github.com/NiceMank/BootForge/releases/download/v1.2.0/BOOTFORGE_MANIFEST.json",
+                        },
+                        {
+                            "name": "BOOTFORGE_MANIFEST.json.sig",
+                            "browser_download_url": "https://github.com/NiceMank/BootForge/releases/download/v1.2.0/BOOTFORGE_MANIFEST.json.sig",
+                        },
+                    ],
+                }
+            ).encode("utf-8")
+
+            # 1. Invalid / corrupted signature rejected by check_for_update
+            bad_sig = base64.b64encode(b"\xaa" * 64).decode("ascii").encode("ascii")
+            with mock.patch(
+                "engine.updater.fetch_https_bytes",
+                side_effect=lambda url, **_kw: rel_json
+                if url.endswith("/releases/latest")
+                else (m_bytes if url.endswith("BOOTFORGE_MANIFEST.json") else bad_sig),
+            ):
+                res_badsig = updater.check_for_update(current_version="1.0.1", trusted_keys=keys)
+            self.assertEqual(res_badsig.status, "invalid_signature")
+            self.assertFalse(res_badsig.verified)
+
+            # 2. Tampered manifest rejected by check_for_update
+            m_dict = json.loads(m_bytes.decode("utf-8"))
+            m_dict["assets"]["linux_deb"]["sha256"] = "0" * 64
+            tampered_m = json.dumps(m_dict).encode("utf-8")
+            with mock.patch(
+                "engine.updater.fetch_https_bytes",
+                side_effect=lambda url, **_kw: rel_json
+                if url.endswith("/releases/latest")
+                else (tampered_m if url.endswith("BOOTFORGE_MANIFEST.json") else sig_bytes),
+            ):
+                res_tampered = updater.check_for_update(current_version="1.0.1", trusted_keys=keys)
+            self.assertEqual(res_tampered.status, "invalid_signature")
+            self.assertFalse(res_tampered.verified)
+
+            # 3. Signed downgrade / version mismatch in manifest blocked
+            old_m = json.dumps(
+                {**json.loads(m_bytes.decode("utf-8")), "version": "1.0.0", "tag": "v1.0.0"}
+            ).encode("utf-8")
+            old_sig = base64.b64encode(priv.sign(old_m)).decode("ascii").encode("ascii")
+            with mock.patch(
+                "engine.updater.fetch_https_bytes",
+                side_effect=lambda url, **_kw: rel_json
+                if url.endswith("/releases/latest")
+                else (old_m if url.endswith("BOOTFORGE_MANIFEST.json") else old_sig),
+            ):
+                res_downgrade = updater.check_for_update(current_version="1.0.1", trusted_keys=keys)
+            self.assertEqual(res_downgrade.status, "downgrade_blocked")
+            self.assertFalse(res_downgrade.verified)
+
+            # 4. Asset substituted / wrong SHA-256 over real download_https_atomic fails cleanly with no leftover file
+            upd_deb = updater.UpdateCheckResult(
+                status="available",
+                current_version="1.0.1",
+                latest_version="1.2.0",
+                tag_name="v1.2.0",
+                verified=True,
+                asset_kind="linux_deb",
+                asset_name="bootforge_1.2.0_all.deb",
+                asset_url="https://github.com/NiceMank/BootForge/releases/download/v1.2.0/bootforge_1.2.0_all.deb",
+                asset_sha256=hashlib.sha256(b"EXPECTED-DEB-PAYLOAD").hexdigest(),
+            )
+            dl_dir = Path(tmp) / "dl"
+
+            class _FakeResponse(io.BytesIO):
+                def __init__(self, payload: bytes, url: str, fail_midstream: bool = False) -> None:
+                    super().__init__(payload)
+                    self._url = url
+                    self._fail_midstream = fail_midstream
+                    self.headers = {"Content-Length": str(len(payload))}
+                    self._reads = 0
+
+                def geturl(self) -> str:
+                    return self._url
+
+                def read(self, size: int = -1) -> bytes:
+                    self._reads += 1
+                    if self._fail_midstream and self._reads >= 2:
+                        raise ConnectionResetError("Simulated interrupted network stream")
+                    return super().read(size)
+
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args):
+                    self.close()
+                    return False
+
+            class _FakeOpener:
+                def __init__(self, payload: bytes, fail_midstream: bool = False) -> None:
+                    self.payload = payload
+                    self.fail_midstream = fail_midstream
+
+                def open(self, req, timeout: int = 45):
+                    return _FakeResponse(self.payload, req.full_url, fail_midstream=self.fail_midstream)
+
+            with mock.patch("engine.net_security.build_https_opener", return_value=_FakeOpener(b"EVIL-SUBSTITUTED-DEB")):
+                with self.assertRaises(ValueError):
+                    updater.download_verified_update(upd_deb, dest_dir=dl_dir)
+            self.assertEqual(list(dl_dir.glob("*")), [])
+
+            # 5. Interrupted download cleans up .part files without leaving partial asset
+            with mock.patch(
+                "engine.net_security.build_https_opener",
+                return_value=_FakeOpener(b"PARTIAL-DATA", fail_midstream=True),
+            ):
+                with self.assertRaises(ConnectionResetError):
+                    updater.download_verified_update(upd_deb, dest_dir=dl_dir)
+            self.assertEqual(list(dl_dir.glob("*")), [])
+
+            with mock.patch("engine.net_security.build_https_opener", return_value=_FakeOpener(b"EXPECTED-DEB-PAYLOAD")):
+                with self.assertRaises(InterruptedError):
+                    updater.download_verified_update(upd_deb, dest_dir=dl_dir, cancel_check=lambda: True)
+            self.assertEqual(list(dl_dir.glob("*")), [])
+
+            # 6. Windows NSIS setup installer invokes ShellExecuteW("runas", ..., "/S", ...) and handles UAC refusal
+            exe_file = Path(tmp) / "BootForge-1.2.0-win64-setup.exe"
+            exe_file.write_bytes(b"MZ-WIN-NSIS-INSTALLER")
+            upd_exe = updater.UpdateCheckResult(
+                status="available",
+                current_version="1.0.1",
+                latest_version="1.2.0",
+                tag_name="v1.2.0",
+                verified=True,
+                asset_kind="windows_setup",
+                asset_name="BootForge-1.2.0-win64-setup.exe",
+                asset_url="https://github.com/NiceMank/BootForge/releases/download/v1.2.0/BootForge-1.2.0-win64-setup.exe",
+                asset_sha256=hashlib.sha256(b"MZ-WIN-NSIS-INSTALLER").hexdigest(),
+            )
+            fake_shell32 = mock.MagicMock()
+            fake_shell32.ShellExecuteW.return_value = 42
+            fake_windll = mock.MagicMock(shell32=fake_shell32)
+            with (
+                mock.patch("engine.updater.sys.platform", "win32"),
+                mock.patch.object(updater.ctypes, "windll", fake_windll, create=True),
+            ):
+                res_win_ok = updater.apply_downloaded_update(exe_file, upd_exe)
+            self.assertEqual(res_win_ok["action"], "launched_win_setup")
+            self.assertTrue(res_win_ok["should_quit"])
+            fake_shell32.ShellExecuteW.assert_called_once_with(None, "runas", str(exe_file.resolve()), "/S", None, 1)
+
+            fake_shell32.ShellExecuteW.return_value = 5
+            with (
+                mock.patch("engine.updater.sys.platform", "win32"),
+                mock.patch.object(updater.ctypes, "windll", fake_windll, create=True),
+            ):
+                with self.assertRaises(RuntimeError):
+                    updater.apply_downloaded_update(exe_file, upd_exe)

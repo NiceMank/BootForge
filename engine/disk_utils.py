@@ -413,7 +413,7 @@ def sanitize_volume_label(label: str, fstype: str) -> str:
         cleaned = SAFE_LABEL_FAT_RE.sub("_", raw).upper()[:11]
         return cleaned or "BOOTFORGE"
     if fs == "exfat":
-        cleaned = SAFE_LABEL_NTFS_RE.sub("_", raw)[:15]
+        cleaned = SAFE_LABEL_NTFS_RE.sub("_", raw)[:11]
         return cleaned or "BootForge"
     if fs == "ext4":
         cleaned = SAFE_LABEL_FAT_RE.sub("_", raw)[:16]

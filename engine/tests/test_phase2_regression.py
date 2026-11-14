@@ -557,6 +557,146 @@ class Phase2RegressionTests(unittest.TestCase):
             self.assertEqual(len(bb_res), 1)
             self.assertGreaterEqual(bb_res[0]["bad_blocks"], 1)
 
+    # ------------------------------------------------------------------
+    # Phase 3 real-hardware findings: exFAT wipefs+mount & pre-wipe raw size check
+    # ------------------------------------------------------------------
+    def test_phase3_exfat_mount_wipefs_and_oversized_raw_precheck(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_p = Path(tmp)
+            fake_usb = _make_usb_dev("/dev/sdz", size_bytes=16 * 1024**3)
+            iso_p = tmp_p / "win11.iso"
+            iso_p.write_bytes(b"ISO" * 64)
+            uefi_img = tmp_p / "uefi-ntfs.img"
+            uefi_img.write_bytes(b"\x00" * 1024)
+            fake_part1 = tmp_p / "sdz1"
+            fake_part2 = tmp_p / "sdz2"
+
+            recorded_cmds: list[list[str]] = []
+
+            def _fake_run_cmd(cmd: list[str], check: bool = True):
+                recorded_cmds.append(list(cmd))
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+
+            def _fake_resolve(_dev: str, num: int) -> str:
+                return str(fake_part1 if num == 1 else fake_part2)
+
+            with (
+                mock.patch("engine.bootforge_engine.validate_target_device", return_value=fake_usb),
+                mock.patch("engine.bootforge_engine.inspect_image", return_value={"os_family": "windows", "is_hybrid": False, "has_efi": True}),
+                mock.patch("engine.bootforge_engine.unmount_device_partitions"),
+                mock.patch("engine.bootforge_engine.run_cmd", side_effect=_fake_run_cmd),
+                mock.patch("engine.bootforge_engine.resolve_partition_node", side_effect=_fake_resolve),
+                mock.patch("engine.bootforge_engine.wait_for_partition"),
+                mock.patch("engine.bootforge_engine.ensure_uefi_ntfs_image", return_value=uefi_img),
+                mock.patch("engine.bootforge_engine.copy_tree_with_progress"),
+                mock.patch("engine.bootforge_engine.os.sync"),
+            ):
+                bootforge_engine.execute_flash_direct(
+                    {
+                        "action": "flash_direct",
+                        "device": "/dev/sdz",
+                        "image_path": str(iso_p),
+                        "scheme": "gpt",
+                        "filesystem": "exfat",
+                        "write_mode": "iso",
+                        "win_tweaks": {"enabled": False},
+                    },
+                    dry_run=False,
+                )
+
+            # Verify stale partition signature wipe AND explicit -t exfat mount
+            self.assertIn(["wipefs", "-a", str(fake_part1)], recorded_cmds)
+            self.assertIn(["mkfs.exfat", "-L", mock.ANY, str(fake_part1)], recorded_cmds)
+            mount_exfat = [c for c in recorded_cmds if len(c) >= 4 and c[0] == "mount" and "-t" in c and "exfat" in c]
+            self.assertEqual(len(mount_exfat), 1)
+
+            # Oversized uncompressed raw .img MUST fail BEFORE wipefs / diskpart clean (both Linux & Windows)
+            oversized = tmp_p / "too_big.img"
+            with open(oversized, "wb") as f:
+                f.truncate(1024 + 512)
+            small_usb = _make_usb_dev("/dev/sdz", size_bytes=1024)
+
+            dd_cmds: list[list[str]] = []
+            with (
+                mock.patch("engine.bootforge_engine.validate_target_device", return_value=small_usb),
+                mock.patch("engine.bootforge_engine.inspect_image", return_value={"os_family": "raw", "is_hybrid": True, "has_efi": False}),
+                mock.patch("engine.bootforge_engine.unmount_device_partitions"),
+                mock.patch("engine.bootforge_engine.run_cmd", side_effect=lambda c, check=True: dd_cmds.append(list(c))),
+            ):
+                with self.assertRaises(RuntimeError) as ctx_dd:
+                    bootforge_engine.execute_flash_direct(
+                        {"action": "flash_direct", "device": "/dev/sdz", "image_path": str(oversized), "write_mode": "dd"}
+                    )
+                self.assertIn("dépasse la capacité", str(ctx_dd.exception))
+                with self.assertRaises(RuntimeError) as ctx_res:
+                    bootforge_engine.execute_toolbox_operation(
+                        {"action": "usb_restore_img", "device": "/dev/sdz", "image_path": str(oversized)}
+                    )
+                self.assertIn("dépasse la capacité", str(ctx_res.exception))
+            self.assertEqual(dd_cmds, [])
+
+            dp_calls: list[list[str]] = []
+            with (
+                mock.patch("engine.win_backend.validate_windows_target", return_value=(small_usb, 2)),
+                mock.patch("engine.win_backend.inspect_image", return_value={"os_family": "raw", "is_hybrid": True, "has_efi": False}),
+                mock.patch("engine.win_backend._run_diskpart", side_effect=lambda cmds, _log: dp_calls.append(cmds)),
+                mock.patch("engine.win_backend.is_windows_admin", return_value=True),
+            ):
+                with self.assertRaises(RuntimeError):
+                    win_backend.execute_win_flash_direct(
+                        {"action": "flash_direct", "device": "\\\\.\\PhysicalDrive2", "image_path": str(oversized), "write_mode": "dd"},
+                        dry_run=False,
+                        emit=lambda *a, **kw: None,
+                        emit_progress=lambda *a, **kw: None,
+                        emit_log=lambda *a, **kw: None,
+                        ensure_uefi_ntfs_image=lambda: tmp_p / "uefi.img",
+                        copy_tree_with_progress=lambda *a, **kw: None,
+                    )
+                with self.assertRaises(RuntimeError):
+                    win_backend.execute_win_toolbox(
+                        {"action": "usb_restore_img", "device": "\\\\.\\PhysicalDrive2", "image_path": str(oversized)},
+                        dry_run=False,
+                        emit=lambda *a, **kw: None,
+                        emit_progress=lambda *a, **kw: None,
+                        emit_log=lambda *a, **kw: None,
+                    )
+            self.assertEqual(dp_calls, [])
+
+            # Phase 3 hardware discoveries: exFAT 11-char volume label cap & persistence ENOSPC precheck
+            self.assertEqual(disk_utils.sanitize_volume_label("BOOTFORGE_OK", "exfat"), "BOOTFORGE_O")
+            self.assertEqual(len(disk_utils.sanitize_volume_label("123456789012345", "exfat")), 11)
+            with mock.patch("engine.ventoy_manager.shutil.disk_usage", return_value=mock.Mock(free=4 * 1024 * 1024)):
+                with self.assertRaises(OSError) as ctx_enospc:
+                    ventoy_manager.create_persistence_dat_image(str(tmp_p / "too_big.dat"), 128)
+                self.assertIn("Espace disque insuffisant", str(ctx_enospc.exception))
+
+    def test_qemu_preview_command_uses_pflash_for_split_ovmf_code(self) -> None:
+        try:
+            from bootforge_ui.backend import build_qemu_preview_command
+        except ImportError:
+            self.skipTest("GTK GI runtime absent (Windows CI)")
+
+        cmd_4m, is_uefi_4m = build_qemu_preview_command(
+            "/dev/sdb",
+            ovmf_path="/usr/share/OVMF/OVMF_CODE_4M.fd",
+            has_kvm=False,
+        )
+        self.assertTrue(is_uefi_4m)
+        self.assertNotIn("-bios", cmd_4m)
+        self.assertIn("if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd", cmd_4m)
+
+        cmd_unified, is_uefi_u = build_qemu_preview_command(
+            "/dev/sdb",
+            ovmf_path="/usr/share/ovmf/OVMF.fd",
+            has_kvm=True,
+        )
+        self.assertTrue(is_uefi_u)
+        self.assertIn("-enable-kvm", cmd_unified)
+        self.assertIn("-cpu", cmd_unified)
+        self.assertIn("host", cmd_unified)
+        self.assertIn("-bios", cmd_unified)
+        self.assertIn("/usr/share/ovmf/OVMF.fd", cmd_unified)
+
 
 if __name__ == "__main__":
     unittest.main()

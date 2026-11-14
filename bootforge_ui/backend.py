@@ -332,6 +332,37 @@ class ActiveProcessController:
         return True
 
 
+def build_qemu_preview_command(
+    device_path: str,
+    *,
+    ovmf_path: Optional[str] = None,
+    has_kvm: Optional[bool] = None,
+) -> tuple[List[str], bool]:
+    """Build QEMU preview argv using pflash for split OVMF_CODE images or -bios for unified OVMF."""
+    ovmf_candidates = (
+        "/usr/share/OVMF/OVMF_CODE_4M.fd",
+        "/usr/share/OVMF/OVMF_CODE.fd",
+        "/usr/share/ovmf/OVMF.fd",
+        "/usr/share/qemu/OVMF.fd",
+    )
+    if ovmf_path is None:
+        ovmf_path = next((c for c in ovmf_candidates if os.path.exists(c)), None)
+    if has_kvm is None:
+        has_kvm = os.path.exists("/dev/kvm")
+
+    cmd = ["pkexec", "qemu-system-x86_64", "-m", "2048", "-smp", "2"]
+    if has_kvm:
+        cmd.extend(["-enable-kvm", "-cpu", "host"])
+    cmd.extend(["-drive", f"file={device_path},format=raw,snapshot=on"])
+    if ovmf_path:
+        if os.path.basename(ovmf_path).startswith("OVMF_CODE"):
+            # Split flash images (OVMF_CODE_4M.fd / OVMF_CODE.fd) fail with -bios on modern QEMU
+            cmd.extend(["-drive", f"if=pflash,format=raw,readonly=on,file={ovmf_path}"])
+        else:
+            cmd.extend(["-bios", ovmf_path])
+    return cmd, bool(ovmf_path)
+
+
 def launch_qemu_preview(device_path: str) -> tuple[bool, str]:
     """Launch QEMU OVMF/BIOS read-only snapshot boot preview detached from UI."""
     if not DEVICE_RE.match(device_path):
@@ -339,22 +370,7 @@ def launch_qemu_preview(device_path: str) -> tuple[bool, str]:
     if not shutil.which("qemu-system-x86_64"):
         return False, "QEMU n’est pas installé. Exécutez : sudo apt install qemu-system-x86 ovmf"
 
-    ovmf_candidates = (
-        "/usr/share/OVMF/OVMF_CODE.fd",
-        "/usr/share/OVMF/OVMF_CODE_4M.fd",
-        "/usr/share/ovmf/OVMF.fd",
-        "/usr/share/qemu/OVMF.fd",
-    )
-    ovmf_path = next((c for c in ovmf_candidates if os.path.exists(c)), None)
-    has_kvm = os.path.exists("/dev/kvm")
-
-    cmd = ["pkexec", "qemu-system-x86_64", "-m", "2048", "-smp", "2"]
-    if has_kvm:
-        cmd.append("-enable-kvm")
-    cmd.extend(["-drive", f"file={device_path},format=raw,snapshot=on"])
-    if ovmf_path:
-        cmd.extend(["-bios", ovmf_path])
-
+    cmd, has_ovmf = build_qemu_preview_command(device_path)
     subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-    mode_txt = "UEFI OVMF" if ovmf_path else "BIOS Legacy"
+    mode_txt = "UEFI OVMF" if has_ovmf else "BIOS Legacy"
     return True, f"Aperçu QEMU lancé en mode lecture seule (-snapshot) · {mode_txt}."

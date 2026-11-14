@@ -177,6 +177,16 @@ def _copy_dir_no_symlinks(src_dir: str, dst_dir: Path) -> None:
             shutil.copy2(sf, target_sub / fn)
 
 
+def _validate_raw_image_fits_device(image_path: str, dev_size_bytes: int) -> None:
+    """Reject oversized uncompressed raw images BEFORE wiping/writing the target block device."""
+    if not image_path.lower().endswith((".gz", ".xz")):
+        img_size = os.path.getsize(image_path)
+        if img_size > dev_size_bytes:
+            raise RuntimeError(
+                f"L'image dépasse la capacité du périphérique cible ({img_size} > {dev_size_bytes} octets)."
+            )
+
+
 def _write_raw_stream_to_device(
     image_path: str,
     device_path: str,
@@ -185,6 +195,7 @@ def _write_raw_stream_to_device(
     action_label: str = "Écriture DD",
 ) -> None:
     """Stream raw, .gz, or .xz disk image to block device with accurate progress & fsync."""
+    _validate_raw_image_fits_device(image_path, dev_size_bytes)
     lower_name = image_path.lower()
     comp_size = max(os.path.getsize(image_path), 1)
     t0 = time.monotonic()
@@ -385,6 +396,7 @@ def execute_flash_direct(job: Dict[str, Any], dry_run: bool = False) -> None:
 
     # Mode DD Raw (hybride Linux / .img / .img.gz / .img.xz)
     if write_mode == "dd":
+        _validate_raw_image_fits_device(image_path, dev_info.size_bytes)
         emit_progress(6, "wipe", f"Effacement des signatures sur {device_path}...")
         run_cmd(["wipefs", "-a", device_path])
         emit_progress(10, "dd", "Écriture bloc par bloc (mode DD) en cours...")
@@ -445,9 +457,10 @@ def execute_flash_direct(job: Dict[str, Any], dry_run: bool = False) -> None:
     for seg_id, pnode in part_map.items():
         wait_for_partition(pnode)
 
-    # Format partitions
+    # Format partitions (clear stale partition-level FS signatures first so mount never misdetects prior FS)
     emit_progress(15, "format", "Formatage des partitions...")
     main_part = part_map["main-payload"]
+    run_cmd(["wipefs", "-a", main_part], check=False)
     if filesystem == "ntfs":
         cmd = ["mkfs.ntfs", "-L", volume_label]
         if quick_format:
@@ -463,11 +476,12 @@ def execute_flash_direct(job: Dict[str, Any], dry_run: bool = False) -> None:
         p_part = part_map["linux-persistence"]
         p_label = "casper-rw" if persistence_type == "casper-rw" else "persistence"
         emit_progress(18, "format", f"Formatage persistance Linux ({p_label})...")
+        run_cmd(["wipefs", "-a", p_part], check=False)
         run_cmd(["mkfs.ext4", "-F", "-q", "-L", p_label, p_part])
         if p_label == "persistence":
             tmp_pmnt = tempfile.mkdtemp(prefix="bf_pmnt_")
             try:
-                run_cmd(["mount", p_part, tmp_pmnt])
+                run_cmd(["mount", "-t", "ext4", p_part, tmp_pmnt])
                 (Path(tmp_pmnt) / "persistence.conf").write_text("/ union\n", encoding="utf-8")
                 os.sync()
             finally:
@@ -476,6 +490,7 @@ def execute_flash_direct(job: Dict[str, Any], dry_run: bool = False) -> None:
     if "uefi-ntfs" in part_map:
         uefi_img = ensure_uefi_ntfs_image()
         boot_part = part_map["uefi-ntfs"]
+        run_cmd(["wipefs", "-a", boot_part], check=False)
         emit_progress(20, "bootloader", "Écriture du chargeur officiel Rufus UEFI:NTFS...")
         with open(uefi_img, "rb") as fin, open(boot_part, "wb") as fout:
             shutil.copyfileobj(fin, fout)
@@ -490,8 +505,10 @@ def execute_flash_direct(job: Dict[str, Any], dry_run: bool = False) -> None:
         run_cmd(["mount", "-o", "loop,ro", image_path, tmp_iso_mnt])
         if filesystem == "ntfs":
             run_cmd(["mount", "-t", "ntfs-3g", main_part, tmp_usb_mnt])
+        elif filesystem == "exfat":
+            run_cmd(["mount", "-t", "exfat", main_part, tmp_usb_mnt])
         else:
-            run_cmd(["mount", main_part, tmp_usb_mnt])
+            run_cmd(["mount", "-t", "vfat", main_part, tmp_usb_mnt])
 
         iso_root = Path(tmp_iso_mnt)
         usb_root = Path(tmp_usb_mnt)
@@ -747,6 +764,7 @@ def execute_toolbox_operation(job: Dict[str, Any], dry_run: bool = False) -> Non
         run_cmd(["partprobe", device_path], check=False)
         part1 = resolve_partition_node(device_path, 1)
         wait_for_partition(part1)
+        run_cmd(["wipefs", "-a", part1], check=False)
         emit_progress(60, "format", f"Formatage propre en {fs.upper()}...")
         if fs == "fat32":
             run_cmd(["mkfs.vfat", "-F", "32", "-n", label, part1])
@@ -792,31 +810,40 @@ def execute_toolbox_operation(job: Dict[str, Any], dry_run: bool = False) -> Non
         if not output_path.endswith((".img", ".img.gz")):
             output_path += ".img.gz" if compress else ".img"
         unmount_device_partitions(device_path)
+        if shutil.which("blockdev"):
+            run_cmd(["blockdev", "--flushbufs", device_path], check=False)
         total = dev_info.size_bytes
         copied = 0
         t0 = time.monotonic()
         last_emit = t0
         chunk_size = 4 * 1024 * 1024
-        opener = (lambda p: gzip.open(p, "wb", compresslevel=4)) if compress else (lambda p: open(p, "wb"))
-        with open(device_path, "rb") as fin, opener(output_path) as fout:
-            while True:
-                buf = fin.read(chunk_size)
-                if not buf:
-                    break
-                fout.write(buf)
-                copied += len(buf)
-                now = time.monotonic()
-                if now - last_emit >= 0.3:
-                    elapsed = max(now - t0, 0.001)
-                    speed = copied / elapsed
-                    pct = (copied / max(total, 1)) * 100.0
-                    emit_progress(
-                        pct,
-                        "backup",
-                        f"Sauvegarde : {copied / (1024**3):.2f} / {total / (1024**3):.2f} Go ({speed / (1024**2):.1f} Mo/s)",
-                        speed_bps=speed,
-                    )
-                    last_emit = now
+        with open(device_path, "rb") as fin, open(output_path, "wb") as raw_fout:
+            fout_gz = gzip.GzipFile(fileobj=raw_fout, mode="wb", compresslevel=4) if compress else None
+            target_out: Any = fout_gz if fout_gz is not None else raw_fout
+            try:
+                while True:
+                    buf = fin.read(chunk_size)
+                    if not buf:
+                        break
+                    target_out.write(buf)
+                    copied += len(buf)
+                    now = time.monotonic()
+                    if now - last_emit >= 0.3:
+                        elapsed = max(now - t0, 0.001)
+                        speed = copied / elapsed
+                        pct = (copied / max(total, 1)) * 100.0
+                        emit_progress(
+                            pct,
+                            "backup",
+                            f"Sauvegarde : {copied / (1024**3):.2f} / {total / (1024**3):.2f} Go ({speed / (1024**2):.1f} Mo/s)",
+                            speed_bps=speed,
+                        )
+                        last_emit = now
+            finally:
+                if fout_gz is not None:
+                    fout_gz.close()
+            raw_fout.flush()
+            os.fsync(raw_fout.fileno())
         emit_progress(100, "done", f"Sauvegarde image créée : {output_path}")
 
     elif action == "usb_restore_img":
@@ -824,6 +851,7 @@ def execute_toolbox_operation(job: Dict[str, Any], dry_run: bool = False) -> Non
         if not os.path.isfile(image_path):
             raise FileNotFoundError(f"Fichier image introuvable : {image_path}")
         validate_paths_not_on_device(dev_info, image_path)
+        _validate_raw_image_fits_device(image_path, dev_info.size_bytes)
         unmount_device_partitions(device_path)
         emit_progress(5, "wipe", f"Effacement des signatures sur {device_path}...")
         run_cmd(["wipefs", "-a", device_path])

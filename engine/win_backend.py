@@ -562,6 +562,16 @@ def _open_windows_image_stream(image_path: str):
     return raw_fin, raw_fin, False
 
 
+def _validate_raw_image_fits_device_win(image_path: str, max_bytes: int) -> None:
+    """Reject oversized uncompressed raw images BEFORE cleaning the target Windows disk."""
+    if not image_path.lower().endswith((".gz", ".xz")):
+        img_size = os.path.getsize(image_path)
+        if img_size > max_bytes:
+            raise RuntimeError(
+                f"L'image dépasse la capacité du périphérique cible ({img_size} > {max_bytes} octets)."
+            )
+
+
 def _write_raw_windows_disk(
     disk_num: int,
     offset_bytes: int,
@@ -694,6 +704,7 @@ def execute_win_flash_direct(
         return
 
     if write_mode == "dd":
+        _validate_raw_image_fits_device_win(image_path, dev_info.size_bytes)
         emit_progress(6, "wipe", f"Nettoyage de {dev_info.path} via diskpart...")
         _run_diskpart([f"select disk {disk_num}", "clean", "exit"], emit_log)
 
@@ -1121,6 +1132,7 @@ def execute_win_toolbox(
         if not os.path.isfile(image_path):
             raise FileNotFoundError(f"Fichier image introuvable : {image_path}")
         validate_paths_not_on_device(dev_info, image_path)
+        _validate_raw_image_fits_device_win(image_path, dev_info.size_bytes)
         emit_progress(5, "wipe", f"Nettoyage de {dev_info.path} via diskpart...")
         _run_diskpart([f"select disk {disk_num}", "clean", "exit"], emit_log)
         total_size = os.path.getsize(image_path)

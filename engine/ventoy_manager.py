@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -398,6 +399,14 @@ def create_persistence_dat_image(
     size_mb_clamped = max(128, min(int(size_mb), 65536))
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
+    needed_bytes = size_mb_clamped * 1024 * 1024
+    free_bytes = shutil.disk_usage(out.parent).free
+    if free_bytes < needed_bytes:
+        raise OSError(
+            errno.ENOSPC,
+            f"Espace disque insuffisant pour créer {out.name} ({size_mb_clamped} Mo requis, {free_bytes // (1024**2)} Mo disponibles).",
+            str(out),
+        )
 
     # Create sparse file of exact size
     subprocess.run(["truncate", "-s", f"{size_mb_clamped}M", str(out)], check=True)
